@@ -111,6 +111,95 @@ def send_email_smtp(host, port, user, password, use_starttls, msg, to_email, cc=
             server.login(user, password)
             server.sendmail(msg["From"], recipients, msg.as_string())
 
+def run_merge(
+    recipients: str,
+    template: str,
+    smtp_host: str,
+    smtp_port: int,
+    smtp_user: str,
+    smtp_pass: str,
+    from_name: str = "",
+    default_subject: str = "Kết quả bài thi Versant level 1 - {{Ten}}",
+    rate_delay: float = 2.0,
+    dry_run: bool = False,
+    use_ssl: bool = False,
+    progress_callback=None,
+) -> dict:
+    """Run the mail merge process.
+
+    Parameters mirror the CLI flags. progress_callback, if provided,
+    will be called with a single string argument for each log line.
+    Returns a dict summary with sent, failed, and errors list.
+    """
+    rec_path = Path(recipients)
+    tpl_path = Path(template)
+
+    df = load_recipients(rec_path)
+    html = tpl_path.read_text(encoding="utf-8")
+
+    def log(message: str):
+        if progress_callback:
+            try:
+                progress_callback(message)
+            except Exception:
+                pass
+        else:
+            print(message)
+
+    sent, failed = 0, 0
+    errors = []
+
+    for i, row in df.iterrows():
+        email = normalize_field(row["Email"])
+        ten = normalize_field(row["Ten"])
+        fpdf = normalize_field(row["FilePDF"])
+        cc = normalize_field(row.get("CC", ""))
+        bcc = normalize_field(row.get("BCC", ""))
+        subj_tpl = normalize_field(row.get("Subject", "")) or default_subject
+
+        tokens = {
+            "Ten": ten,
+            "Email": email,
+            "NgayGui": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        subject = render_template(subj_tpl, tokens)
+        body_html = render_template(html, tokens)
+
+        try:
+            msg = build_message(from_name, smtp_user, email, cc, bcc, subject, body_html)
+
+            attach_file(msg, fpdf)
+
+            use_starttls = not use_ssl
+            send_email_smtp(
+                host=smtp_host,
+                port=smtp_port,
+                user=smtp_user,
+                password=smtp_pass,
+                use_starttls=use_starttls,
+                msg=msg,
+                to_email=email,
+                cc=cc,
+                bcc=bcc,
+                dry_run=dry_run,
+            )
+            sent += 1
+            log(f"[OK] {email}")
+        except Exception as e:
+            failed += 1
+            errors.append((email, str(e)))
+            log(f"[ERR] {email} -> {e}")
+
+        time.sleep(max(0.0, rate_delay))
+
+    log(f"\nDone. Sent={sent}, Failed={failed}")
+    if errors:
+        log("Errors:")
+        for em, err in errors:
+            log(f" - {em}: {err}")
+
+    return {"sent": sent, "failed": failed, "errors": errors}
+
 def main():
     parser = argparse.ArgumentParser(description="Mail Merge kèm PDF per-recipient (local).")
     parser.add_argument("--recipients", required=True, help="Đường dẫn recipients .xlsx/.csv")
@@ -126,63 +215,19 @@ def main():
     parser.add_argument("--use-ssl", action="store_true", help="Dùng SMTPS (SSL) thay vì STARTTLS")
     args = parser.parse_args()
 
-    rec_path = Path(args.recipients)
-    tpl_path = Path(args.template)
-
-    df = load_recipients(rec_path)
-    html = tpl_path.read_text(encoding="utf-8")
-
-    sent, failed = 0, 0
-    errors = []
-
-    for i, row in df.iterrows():
-        email = normalize_field(row["Email"]) 
-        ten = normalize_field(row["Ten"]) 
-        fpdf = normalize_field(row["FilePDF"]) 
-        cc = normalize_field(row.get("CC", ""))
-        bcc = normalize_field(row.get("BCC", ""))
-        subj_tpl = normalize_field(row.get("Subject", "")) or args.default_subject
-
-        tokens = {
-            "Ten": ten,
-            "Email": email,
-            "NgayGui": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        }
-        subject = render_template(subj_tpl, tokens)
-        body_html = render_template(html, tokens)
-
-        try:
-            msg = build_message(args.from_name, args.smtp_user, email, cc, bcc, subject, body_html)
-            attach_file(msg, fpdf)
-
-            # Decide SSL vs STARTTLS
-            use_starttls = not args.use_ssl
-            send_email_smtp(
-                host=args.smtp_host,
-                port=args.smtp_port,
-                user=args.smtp_user,
-                password=args.smtp_pass,
-                use_starttls=use_starttls,
-                msg=msg,
-                to_email=email,
-                cc=cc,
-                bcc=bcc,
-                dry_run=args.dry_run,
-            )
-            sent += 1
-            print(f"[OK] {email}")
-        except Exception as e:
-            failed += 1
-            errors.append((email, str(e)))
-            print(f"[ERR] {email} -> {e}")
-
-        time.sleep(max(0.0, args.rate_delay))
-
-    print(f"\nDone. Sent={sent}, Failed={failed}")
-    if errors:
-        print("Errors:")
-        for em, err in errors:
-            print(f" - {em}: {err}")
+    run_merge(
+        recipients=args.recipients,
+        template=args.template,
+        smtp_host=args.smtp_host,
+        smtp_port=args.smtp_port,
+        smtp_user=args.smtp_user,
+        smtp_pass=args.smtp_pass,
+        from_name=args.from_name,
+        default_subject=args.default_subject,
+        rate_delay=args.rate_delay,
+        dry_run=args.dry_run,
+        use_ssl=args.use_ssl,
+    )
 
 if __name__ == "__main__":
     main()
