@@ -4,12 +4,15 @@ import smtplib
 import ssl
 import time
 import mimetypes
+import tempfile
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
 from email.utils import formataddr, make_msgid
+from urllib.parse import urlparse
 import pandas as pd
+import requests
 from pathlib import Path
 
 REQUIRED_COLS = ["Email", "Ten", "FilePDF"]
@@ -74,7 +77,29 @@ def build_message(sender_name, sender_email, to_email, cc, bcc, subject, html_bo
     msg.attach(MIMEText(html_body, "html", "utf-8"))
     return msg
 
-def attach_file(msg, file_path):
+def _download_to_temp(url: str) -> Path:
+    resp = requests.get(url, stream=True, timeout=30)
+    resp.raise_for_status()
+    filename = Path(urlparse(url).path).name or "attachment.pdf"
+    suffix = Path(filename).suffix or ".bin"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        for chunk in resp.iter_content(chunk_size=8192):
+            if chunk:
+                tmp.write(chunk)
+        return Path(tmp.name)
+
+
+def _resolve_file_path(path_or_url: str, base_dir: Path | None) -> Path:
+    s = str(path_or_url).strip()
+    if s.startswith("http://") or s.startswith("https://"):
+        return _download_to_temp(s)
+    fpath = Path(s)
+    if not fpath.is_absolute() and base_dir is not None:
+        fpath = base_dir / fpath
+    return fpath
+
+
+def attach_file(msg, file_path: Path):
     fpath = Path(file_path)
     if not fpath.exists():
         raise FileNotFoundError(f"Không tìm thấy file: {fpath}")
@@ -123,6 +148,7 @@ def run_merge(
     rate_delay: float = 2.0,
     dry_run: bool = False,
     use_ssl: bool = False,
+    base_dir: str | None = None,
     progress_callback=None,
 ) -> dict:
     """Run the mail merge process.
@@ -133,6 +159,7 @@ def run_merge(
     """
     rec_path = Path(recipients)
     tpl_path = Path(template)
+    base = Path(base_dir) if base_dir else None
 
     df = load_recipients(rec_path)
     html = tpl_path.read_text(encoding="utf-8")
@@ -168,7 +195,8 @@ def run_merge(
         try:
             msg = build_message(from_name, smtp_user, email, cc, bcc, subject, body_html)
 
-            attach_file(msg, fpdf)
+            resolved_path = _resolve_file_path(fpdf, base)
+            attach_file(msg, resolved_path)
 
             use_starttls = not use_ssl
             send_email_smtp(
@@ -213,6 +241,7 @@ def main():
     parser.add_argument("--rate-delay", type=float, default=2.0, help="Delay (giây) giữa mỗi email để tránh bị giới hạn")
     parser.add_argument("--dry-run", action="store_true", help="Chạy thử: không gửi email thật")
     parser.add_argument("--use-ssl", action="store_true", help="Dùng SMTPS (SSL) thay vì STARTTLS")
+    parser.add_argument("--base-dir", default="", help="Thư mục gốc chứa file đính kèm khi cột FilePDF là đường dẫn tương đối")
     args = parser.parse_args()
 
     run_merge(
@@ -227,6 +256,7 @@ def main():
         rate_delay=args.rate_delay,
         dry_run=args.dry_run,
         use_ssl=args.use_ssl,
+        base_dir=(args.base_dir or None),
     )
 
 if __name__ == "__main__":

@@ -55,6 +55,11 @@ def main() -> None:
     up_recipients = st.file_uploader("Recipients (.xlsx/.csv)", type=["xlsx", "xls", "csv"], help="Bắt buộc")
     up_template = st.file_uploader("Template HTML", type=["html"], help="Mặc định dùng template.html trong dự án nếu để trống")
 
+    st.subheader("File đính kèm")
+    st.caption("Nếu recipients chỉ chứa tên file (ví dụ: A.pdf), hãy upload thư mục ZIP chứa các PDF hoặc chọn thư mục gốc.")
+    zip_upload = st.file_uploader("Upload ZIP chứa các PDF (tùy chọn)", type=["zip"], accept_multiple_files=False)
+    base_dir_text = st.text_input("Base directory (tùy chọn)", value=str(Path(__file__).parent))
+
     # Or use defaults from project folder
     st.write(":small_blue_diamond: Nếu không upload, ứng dụng sẽ dùng:")
     st.code(str(default_recipients), language="text")
@@ -100,6 +105,7 @@ def main() -> None:
                 rate_delay=float(rate_delay),
                 dry_run=bool(dry_run),
                 use_ssl=bool(use_ssl),
+                base_dir=(base_dir_text or None),
                 progress_callback=cb,
             )
 
