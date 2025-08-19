@@ -41,14 +41,14 @@ jobs:
       - name: SSH smoke test (publickey only)
         run: |
           set -euo pipefail
-          ssh -vvv -o BatchMode=yes -o IdentitiesOnly=yes -o PreferredAuthentications=publickey \
-              -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "echo 'SSH OK: ' \$(whoami)@\$(hostname)"
+          ssh -vvv -o BatchMode=yes -o PreferredAuthentications=publickey \
+            -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "echo 'SSH OK:' \$(whoami)@\$(hostname)"
 
       - name: Create remote directory
         run: |
           set -euo pipefail
-          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o PreferredAuthentications=publickey \
-              -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "mkdir -p '$DEPLOY_PATH'"
+          ssh -o BatchMode=yes -o PreferredAuthentications=publickey \
+            -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "mkdir -p '$DEPLOY_PATH'"
 
       - name: Rsync source to server
         run: |
@@ -57,12 +57,12 @@ jobs:
             --exclude '.git' \
             --exclude '.venv' \
             --exclude '__pycache__' \
-            -e "ssh -o BatchMode=yes -o IdentitiesOnly=yes -o PreferredAuthentications=publickey -p $SSH_PORT" \
+            -e "ssh -o BatchMode=yes -o PreferredAuthentications=publickey -p $SSH_PORT" \
             ./ "$SSH_USER@$SSH_HOST:$DEPLOY_PATH/"
 
       - name: Run remote deploy script
         run: |
           set -euo pipefail
-          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o PreferredAuthentications=publickey \
-              -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
-              "cd '$DEPLOY_PATH' && chmod +x scripts/deploy.sh && STREAMLIT_PORT='$STREAMLIT_PORT' STREAMLIT_ADDRESS='$STREAMLIT_ADDRESS' bash scripts/deploy.sh"
+          ssh -o BatchMode=yes -o PreferredAuthentications=publickey \
+            -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+            "cd '$DEPLOY_PATH' && chmod +x scripts/deploy.sh && STREAMLIT_PORT='$STREAMLIT_PORT' STREAMLIT_ADDRESS='$STREAMLIT_ADDRESS' bash scripts/deploy.sh"
