@@ -15,6 +15,7 @@ jobs:
       DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
       STREAMLIT_PORT: ${{ secrets.STREAMLIT_PORT || '8502' }}
       STREAMLIT_ADDRESS: ${{ secrets.STREAMLIT_ADDRESS || '0.0.0.0' }}
+      SSH_PRIVATE_KEY_B64: ${{ secrets.SSH_PRIVATE_KEY_B64 }}
 
     steps:
       - name: Checkout repository
@@ -23,36 +24,31 @@ jobs:
       - name: Validate required envs
         run: |
           set -euo pipefail
-          [ -n "${SSH_HOST:-}" ] && [ -n "${SSH_USER:-}" ] && [ -n "${DEPLOY_PATH:-}" ] || {
-            echo "Missing SSH_HOST/SSH_USER/DEPLOY_PATH envs"; exit 1; }
+          [ -n "${SSH_HOST:-}" ] && [ -n "${SSH_USER:-}" ] && [ -n "${DEPLOY_PATH:-}" ] && [ -n "${SSH_PRIVATE_KEY_B64:-}" ] || {
+            echo "Missing SSH_HOST/SSH_USER/DEPLOY_PATH/SSH_PRIVATE_KEY_B64"; exit 1; }
 
-      - name: Set up SSH agent
-        uses: webfactory/ssh-agent@v0.9.0
-        with:
-          ssh-private-key: |
-            ${{ secrets.SSH_PRIVATE_KEY }}
-
-      - name: Add server to known_hosts
+      - name: Prepare SSH key & agent
         run: |
           set -euo pipefail
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          # Giải mã private key từ secret base64 và làm sạch CRLF nếu có
+          echo "$SSH_PRIVATE_KEY_B64" | base64 -d > /tmp/gha_id_ed25519
+          sed -i 's/\r$//' /tmp/gha_id_ed25519
+          chmod 600 /tmp/gha_id_ed25519
+
+          # Khởi tạo agent và nạp key
+          eval "$(ssh-agent -s)"
+          ssh-add /tmp/gha_id_ed25519
+
+          # Thêm host vào known_hosts
           ssh-keyscan -H -p "$SSH_PORT" "$SSH_HOST" >> ~/.ssh/known_hosts
           chmod 644 ~/.ssh/known_hosts
 
-      - name: Verify SSH key matches server (fingerprint)
-        run: |
-          set -euo pipefail
-          # Xuất public key từ private key trong Secret để xem fingerprint
-          printf "%s" "${{ secrets.SSH_PRIVATE_KEY }}" > /tmp/gha_id_ed25519
-          chmod 600 /tmp/gha_id_ed25519
-          echo "Fingerprint (from Secret private key):"
-          ssh-keygen -y -f /tmp/gha_id_ed25519 | ssh-keygen -lf -
-          echo "Fingerprint(s) on server authorized_keys:"
-          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o PreferredAuthentications=publickey \
-              -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "ssh-keygen -lf ~/.ssh/authorized_keys || true"
+          # In fingerprint key đã nạp (để đối chiếu với server)
+          echo "Agent keys fingerprint:"
+          ssh-add -L | head -n1 | ssh-keygen -lf -
 
-      - name: SSH smoke test (publickey only, verbose)
+      - name: SSH smoke test (publickey only)
         run: |
           set -euo pipefail
           ssh -vvv -o BatchMode=yes -o IdentitiesOnly=yes -o PreferredAuthentications=publickey \
