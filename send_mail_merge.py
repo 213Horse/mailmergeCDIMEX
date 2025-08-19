@@ -106,9 +106,9 @@ def _collect_inline_images(html: str, base_dir: Path | None) -> tuple[str, list]
         return html, []
 
     image_parts = []
-    # naive but sufficient for controlled templates
-    pattern = re.compile(r"<img[^>]+src=\"([^\"]+)\"", re.IGNORECASE)
-    matches = list({m.group(1) for m in pattern.finditer(html)})
+    # Match src values in <img> tags, supporting single/double quotes and newlines
+    pattern = re.compile(r"<img\b[^>]*?src=[\"']([^\"']+)[\"']", re.IGNORECASE | re.DOTALL)
+    matches = list({m.group(1).strip() for m in pattern.finditer(html)})
 
     for src in matches:
         s = src.strip()
@@ -121,6 +121,11 @@ def _collect_inline_images(html: str, base_dir: Path | None) -> tuple[str, list]
             if not img_path.exists():
                 continue
             mime_type, _ = mimetypes.guess_type(str(img_path))
+            # Fallback by extension if mimetype guessing fails
+            if not mime_type:
+                ext = img_path.suffix.lower().lstrip(".")
+                if ext in {"png", "jpg", "jpeg", "gif", "bmp", "webp"}:
+                    mime_type = f"image/{'jpeg' if ext == 'jpg' else ext}"
             if not mime_type or not mime_type.startswith("image/"):
                 continue
             with open(img_path, "rb") as f:
