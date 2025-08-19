@@ -15,9 +15,16 @@ jobs:
       DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
       STREAMLIT_PORT: ${{ secrets.STREAMLIT_PORT || '8502' }}
       STREAMLIT_ADDRESS: ${{ secrets.STREAMLIT_ADDRESS || '0.0.0.0' }}
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Validate required envs
+        run: |
+          set -euo pipefail
+          [ -n "${SSH_HOST:-}" ] && [ -n "${SSH_USER:-}" ] && [ -n "${DEPLOY_PATH:-}" ] || {
+            echo "Missing SSH_HOST/SSH_USER/DEPLOY_PATH envs"; exit 1; }
 
       - name: Set up SSH agent
         uses: webfactory/ssh-agent@v0.9.0
@@ -27,22 +34,49 @@ jobs:
 
       - name: Add server to known_hosts
         run: |
+          set -euo pipefail
           mkdir -p ~/.ssh
-          ssh-keyscan -p "$SSH_PORT" "$SSH_HOST" >> ~/.ssh/known_hosts
+          chmod 700 ~/.ssh
+          ssh-keyscan -H -p "$SSH_PORT" "$SSH_HOST" >> ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Verify SSH key matches server (fingerprint)
+        run: |
+          set -euo pipefail
+          # Xuất public key từ private key trong Secret để xem fingerprint
+          printf "%s" "${{ secrets.SSH_PRIVATE_KEY }}" > /tmp/gha_id_ed25519
+          chmod 600 /tmp/gha_id_ed25519
+          echo "Fingerprint (from Secret private key):"
+          ssh-keygen -y -f /tmp/gha_id_ed25519 | ssh-keygen -lf -
+          echo "Fingerprint(s) on server authorized_keys:"
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o PreferredAuthentications=publickey \
+              -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "ssh-keygen -lf ~/.ssh/authorized_keys || true"
+
+      - name: SSH smoke test (publickey only, verbose)
+        run: |
+          set -euo pipefail
+          ssh -vvv -o BatchMode=yes -o IdentitiesOnly=yes -o PreferredAuthentications=publickey \
+              -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "echo 'SSH OK: ' \$(whoami)@\$(hostname)"
 
       - name: Create remote directory
         run: |
-          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "mkdir -p '$DEPLOY_PATH'"
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o PreferredAuthentications=publickey \
+              -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "mkdir -p '$DEPLOY_PATH'"
 
       - name: Rsync source to server
         run: |
+          set -euo pipefail
           rsync -avz --delete \
             --exclude '.git' \
             --exclude '.venv' \
             --exclude '__pycache__' \
-            -e "ssh -p $SSH_PORT" \
+            -e "ssh -o BatchMode=yes -o IdentitiesOnly=yes -o PreferredAuthentications=publickey -p $SSH_PORT" \
             ./ "$SSH_USER@$SSH_HOST:$DEPLOY_PATH/"
 
       - name: Run remote deploy script
         run: |
-          ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "cd '$DEPLOY_PATH' && chmod +x scripts/deploy.sh && STREAMLIT_PORT='$STREAMLIT_PORT' STREAMLIT_ADDRESS='$STREAMLIT_ADDRESS' bash scripts/deploy.sh"
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o PreferredAuthentications=publickey \
+              -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+              "cd '$DEPLOY_PATH' && chmod +x scripts/deploy.sh && STREAMLIT_PORT='$STREAMLIT_PORT' STREAMLIT_ADDRESS='$STREAMLIT_ADDRESS' bash scripts/deploy.sh"
