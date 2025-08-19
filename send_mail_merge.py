@@ -4,10 +4,12 @@ import smtplib
 import ssl
 import time
 import mimetypes
+import re
 import tempfile
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.mime.image import MIMEImage
 from email.mime.application import MIMEApplication
 from email.utils import formataddr, make_msgid
 from urllib.parse import urlparse
@@ -62,20 +64,78 @@ def render_template(html: str, mapping: dict) -> str:
         out = out.replace("{{" + k + "}}", str(v))
     return out
 
-def build_message(sender_name, sender_email, to_email, cc, bcc, subject, html_body, text_fallback=None):
-    msg = MIMEMultipart("alternative")
-    msg["From"] = formataddr((sender_name, sender_email)) if sender_name else sender_email
-    msg["To"] = to_email
+def build_message(sender_name, sender_email, to_email, cc, bcc, subject, html_body, text_fallback=None, inline_images=None):
+    """Create an email message with HTML, text fallback and optional inline images.
+
+    Uses a multipart/related root with a multipart/alternative subpart for
+    maximum compatibility across email clients.
+    """
+    root = MIMEMultipart("related")
+    root["From"] = formataddr((sender_name, sender_email)) if sender_name else sender_email
+    root["To"] = to_email
     if cc:
-        msg["Cc"] = cc
-    msg["Subject"] = subject
-    msg["Message-ID"] = make_msgid()
-    # Text fallback
+        root["Cc"] = cc
+    root["Subject"] = subject
+    root["Message-ID"] = make_msgid()
+
     if not text_fallback:
-        text_fallback = "Xin chào,\n\nVui lòng xem nội dung email ở dạng HTML hoặc file đính kèm.\n\nTrân trọng."
-    msg.attach(MIMEText(text_fallback, "plain", "utf-8"))
-    msg.attach(MIMEText(html_body, "html", "utf-8"))
-    return msg
+        text_fallback = (
+            "Xin chào,\n\nVui lòng xem nội dung email ở dạng HTML hoặc file đính kèm.\n\nTrân trọng."
+        )
+
+    alt = MIMEMultipart("alternative")
+    alt.attach(MIMEText(text_fallback, "plain", "utf-8"))
+    alt.attach(MIMEText(html_body, "html", "utf-8"))
+    root.attach(alt)
+
+    if inline_images:
+        for img_part in inline_images:
+            root.attach(img_part)
+
+    return root
+
+def _is_http_url(url: str) -> bool:
+    return url.startswith("http://") or url.startswith("https://")
+
+def _collect_inline_images(html: str, base_dir: Path | None) -> tuple[str, list]:
+    """Find local <img src> in HTML and return html with cid + MIMEImage parts.
+
+    Only processes src values that are not http(s), not data: and not cid:.
+    """
+    if not html:
+        return html, []
+
+    image_parts = []
+    # naive but sufficient for controlled templates
+    pattern = re.compile(r"<img[^>]+src=\"([^\"]+)\"", re.IGNORECASE)
+    matches = list({m.group(1) for m in pattern.finditer(html)})
+
+    for src in matches:
+        s = src.strip()
+        if _is_http_url(s) or s.startswith("data:") or s.startswith("cid:"):
+            continue
+        try:
+            img_path = Path(s)
+            if not img_path.is_absolute() and base_dir is not None:
+                img_path = Path(base_dir) / img_path
+            if not img_path.exists():
+                continue
+            mime_type, _ = mimetypes.guess_type(str(img_path))
+            if not mime_type or not mime_type.startswith("image/"):
+                continue
+            with open(img_path, "rb") as f:
+                data = f.read()
+            subtype = mime_type.split("/", 1)[1]
+            img = MIMEImage(data, _subtype=subtype)
+            cid = make_msgid()[1:-1]
+            img.add_header("Content-ID", f"<{cid}>")
+            img.add_header("Content-Disposition", "inline", filename=img_path.name)
+            image_parts.append(img)
+            html = html.replace(src, f"cid:{cid}")
+        except Exception:
+            # ignore broken image embedding; leave original src
+            pass
+    return html, image_parts
 
 def _download_to_temp(url: str) -> Path:
     resp = requests.get(url, stream=True, timeout=30)
@@ -191,9 +251,11 @@ def run_merge(
         }
         subject = render_template(subj_tpl, tokens)
         body_html = render_template(html, tokens)
+        # Prepare inline images referenced by template
+        body_html_with_cid, inline_imgs = _collect_inline_images(body_html, tpl_path.parent)
 
         try:
-            msg = build_message(from_name, smtp_user, email, cc, bcc, subject, body_html)
+            msg = build_message(from_name, smtp_user, email, cc, bcc, subject, body_html_with_cid, inline_images=inline_imgs)
 
             resolved_path = _resolve_file_path(fpdf, base)
             attach_file(msg, resolved_path)
