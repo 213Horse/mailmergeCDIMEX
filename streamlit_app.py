@@ -81,10 +81,10 @@ def render_file_manager(root_dir: Path) -> None:
             parent = fm_cwd.parent
             if _is_safe_relative_path(fm_root, parent):
                 st.session_state["fm_cwd"] = str(parent)
-                st.rerun()
+                st.experimental_rerun()
     with cols[2]:
         if st.button("Làm mới"):
-            st.rerun()
+            st.experimental_rerun()
     with cols[3]:
         allow_delete = st.checkbox("Bật xoá", value=False)
 
@@ -104,7 +104,7 @@ def render_file_manager(root_dir: Path) -> None:
                     try:
                         target.mkdir(exist_ok=False)
                         st.success(f"Đã tạo: {target.name}")
-                        st.rerun()
+                        st.experimental_rerun()
                     except FileExistsError:
                         st.warning("Thư mục đã tồn tại.")
                     except Exception as exc:
@@ -127,7 +127,7 @@ def render_file_manager(root_dir: Path) -> None:
                 except Exception as exc:
                     st.error(f"Không thể lưu {uf.name}: {exc}")
             st.success(f"Đã lưu {saved} tệp vào {fm_cwd}")
-            st.rerun()
+            st.experimental_rerun()
 
     st.divider()
 
@@ -155,7 +155,7 @@ def render_file_manager(root_dir: Path) -> None:
                 if st.button("Mở", key=f"open_{e.name}"):
                     if _is_safe_relative_path(fm_root, e):
                         st.session_state["fm_cwd"] = str(e.resolve())
-                        st.rerun()
+                        st.experimental_rerun()
             else:
                 try:
                     data = e.read_bytes()
@@ -169,7 +169,7 @@ def render_file_manager(root_dir: Path) -> None:
                         try:
                             shutil.rmtree(e)
                             st.success(f"Đã xoá thư mục: {e.name}")
-                            st.rerun()
+                            st.experimental_rerun()
                         except Exception as exc:
                             st.error(f"Không thể xoá thư mục: {exc}")
             else:
@@ -178,7 +178,7 @@ def render_file_manager(root_dir: Path) -> None:
                         try:
                             e.unlink(missing_ok=False)
                             st.success(f"Đã xoá tệp: {e.name}")
-                            st.rerun()
+                            st.experimental_rerun()
                         except Exception as exc:
                             st.error(f"Không thể xoá tệp: {exc}")
 
