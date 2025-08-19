@@ -93,7 +93,7 @@ def render_file_manager(root_dir: Path) -> None:
     with cols[0]:
         st.write(f"Đang ở: {fm_cwd}")
     with cols[1]:
-        if st.button("Lên trên", disabled=fm_cwd == fm_root):
+        if st.button("Back", disabled=fm_cwd == fm_root):
             parent = fm_cwd.parent
             if _is_safe_relative_path(fm_root, parent):
                 st.session_state["fm_cwd"] = str(parent)
