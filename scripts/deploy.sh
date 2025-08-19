@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
 # Deployment script for Bookmedi Mail Merge (runs on remote server)
 # - Creates/updates venv
@@ -7,13 +7,11 @@ set -euo pipefail
 # - Restarts Streamlit app
 
 APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-PORT="${STREAMLIT_PORT:-8501}"
+PORT="${STREAMLIT_PORT:-8502}"           # khớp default với workflow (8502)
 ADDRESS="${STREAMLIT_ADDRESS:-0.0.0.0}"
+APP_FILE="${APP_FILE:-streamlit_app.py}" # đổi nếu entrypoint khác
 PY_BIN="python3"
-
-if ! command -v "${PY_BIN}" >/dev/null 2>&1; then
-  PY_BIN="python"
-fi
+command -v "${PY_BIN}" >/dev/null 2>&1 || PY_BIN="python"
 
 cd "$APP_DIR"
 
@@ -27,7 +25,11 @@ fi
 # shellcheck disable=SC1091
 source .venv/bin/activate
 
-# Upgrade pip and install deps
+# (tuỳ chọn) mirror pip như log của bạn
+: "${PIP_INDEX_URL:=https://mirrors.aliyun.com/pypi/simple}"
+export PIP_INDEX_URL
+
+# Upgrade pip và cài deps
 python -m pip install --upgrade pip
 if [[ -f requirements.txt ]]; then
   echo "[deploy] Installing requirements..."
@@ -37,23 +39,27 @@ else
   pip install pandas openpyxl streamlit requests
 fi
 
-# Stop existing Streamlit process on the port (best effort)
+# Stop tiến trình đang chiếm port (best effort)
 echo "[deploy] Stopping existing app on port ${PORT} (if any)..."
-if command -v lsof >/dev/null 2>&1; then
-  pids=$(lsof -ti tcp:"${PORT}" || true)
+if command -v fuser >/dev/null 2>&1; then
+  fuser -k "${PORT}/tcp" || true
+else
+  pids="$(lsof -ti tcp:${PORT} || true)"
   if [[ -n "${pids}" ]]; then
-    echo "[deploy] Killing PIDs: ${pids}"
     kill -9 ${pids} || true
   fi
-else
-  pkill -f "streamlit run streamlit_app.py" || true
 fi
 
-# Start the app
+# Start app
 echo "[deploy] Starting Streamlit app on ${ADDRESS}:${PORT}..."
-nohup .venv/bin/python -m streamlit run streamlit_app.py \
+mkdir -p logs
+STREAMLIT_BIN="$(pwd)/.venv/bin/streamlit"
+
+nohup "${STREAMLIT_BIN}" run "${APP_FILE}" \
   --server.address "${ADDRESS}" \
   --server.port "${PORT}" \
-  > app.log 2>&1 &
+  --server.headless true \
+  > "logs/streamlit.log" 2>&1 &
 
-echo "[deploy] Done. Logs: ${APP_DIR}/app.log
+sleep 1
+echo "[deploy] Done. Logs: ${APP_DIR}/logs/streamlit.log"
