@@ -11,6 +11,22 @@ import zipfile
 from send_mail_merge import run_merge
 
 
+def _safe_rerun() -> None:
+    """Call Streamlit rerun API across versions.
+
+    Uses st.rerun() when available, otherwise falls back to
+    st.experimental_rerun() for older Streamlit versions.
+    """
+    rerun_fn = getattr(st, "rerun", None)
+    if callable(rerun_fn):
+        rerun_fn()
+        return
+    exp_rerun_fn = getattr(st, "experimental_rerun", None)
+    if callable(exp_rerun_fn):
+        exp_rerun_fn()
+        return
+
+
 def save_upload(file, suffix: str) -> Path:
     """Persist an uploaded file to a temporary path and return the path."""
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
@@ -81,10 +97,10 @@ def render_file_manager(root_dir: Path) -> None:
             parent = fm_cwd.parent
             if _is_safe_relative_path(fm_root, parent):
                 st.session_state["fm_cwd"] = str(parent)
-                st.experimental_rerun()
+                _safe_rerun()
     with cols[2]:
         if st.button("Làm mới"):
-            st.experimental_rerun()
+            _safe_rerun()
     with cols[3]:
         allow_delete = st.checkbox("Bật xoá", value=False)
 
@@ -104,7 +120,7 @@ def render_file_manager(root_dir: Path) -> None:
                     try:
                         target.mkdir(exist_ok=False)
                         st.success(f"Đã tạo: {target.name}")
-                        st.experimental_rerun()
+                        _safe_rerun()
                     except FileExistsError:
                         st.warning("Thư mục đã tồn tại.")
                     except Exception as exc:
@@ -127,7 +143,7 @@ def render_file_manager(root_dir: Path) -> None:
                 except Exception as exc:
                     st.error(f"Không thể lưu {uf.name}: {exc}")
             st.success(f"Đã lưu {saved} tệp vào {fm_cwd}")
-            st.experimental_rerun()
+            _safe_rerun()
 
     st.divider()
 
@@ -155,7 +171,7 @@ def render_file_manager(root_dir: Path) -> None:
                 if st.button("Mở", key=f"open_{e.name}"):
                     if _is_safe_relative_path(fm_root, e):
                         st.session_state["fm_cwd"] = str(e.resolve())
-                        st.experimental_rerun()
+                        _safe_rerun()
             else:
                 try:
                     data = e.read_bytes()
@@ -169,7 +185,7 @@ def render_file_manager(root_dir: Path) -> None:
                         try:
                             shutil.rmtree(e)
                             st.success(f"Đã xoá thư mục: {e.name}")
-                            st.experimental_rerun()
+                            _safe_rerun()
                         except Exception as exc:
                             st.error(f"Không thể xoá thư mục: {exc}")
             else:
@@ -178,7 +194,7 @@ def render_file_manager(root_dir: Path) -> None:
                         try:
                             e.unlink(missing_ok=False)
                             st.success(f"Đã xoá tệp: {e.name}")
-                            st.experimental_rerun()
+                            _safe_rerun()
                         except Exception as exc:
                             st.error(f"Không thể xoá tệp: {exc}")
 
