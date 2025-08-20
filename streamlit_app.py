@@ -238,8 +238,8 @@ def render_file_manager(root_dir: Path) -> None:
 
 # ========== App chính ==========
 def main() -> None:
-    st.set_page_config(page_title="Bookmedi Mail Merge", layout="centered")
-    st.title("Bookmedi Mail Merge")
+    st.set_page_config(page_title="Cdimex Mail Merge", layout="centered")
+    st.title("Cdimex Mail Merge")
     st.caption("Gửi email kèm PDF theo danh sách")
 
     base = Path(__file__).parent
