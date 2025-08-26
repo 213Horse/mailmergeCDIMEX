@@ -16,6 +16,15 @@ import zipfile
 import fcntl  # dùng lock file trên Linux
 
 import streamlit as st
+try:
+    # Optional rich text editor
+    from streamlit_ckeditor import st_ckeditor  # type: ignore
+except Exception:
+    st_ckeditor = None  # fallback later
+try:
+    from streamlit_quill import st_quill  # type: ignore
+except Exception:
+    st_quill = None
 
 from send_mail_merge import run_merge
 
@@ -283,7 +292,72 @@ def main() -> None:
         # Main form
         st.subheader("Chọn tệp")
         up_recipients = st.file_uploader("Recipients (.xlsx/.csv)", type=["xlsx", "xls", "csv"], help="Bắt buộc", key="rec_upl")
-        up_template = st.file_uploader("Template HTML", type=["html"], help="Mặc định dùng template.html trong dự án nếu để trống", key="tpl_upl")
+
+        MODE_FILE = "Dùng file HTML"
+        MODE_EDITOR = "Soạn trực tiếp (WYSIWYG)"
+        mode = st.radio(
+            "Cách nhập nội dung email",
+            [MODE_FILE, MODE_EDITOR],
+            horizontal=True,
+            index=0,
+            key="content_mode",
+        )
+
+        html_content: str | None = None
+        up_template = None
+        if mode == MODE_FILE:
+            up_template = st.file_uploader(
+                "Template HTML",
+                type=["html"],
+                help="Mặc định dùng template.html trong dự án nếu để trống",
+                key="tpl_upl",
+            )
+        else:
+            st.caption("Bạn có thể gõ nội dung và dùng token như {{Ten}}, {{Email}} ...")
+            default_html = ""
+            try:
+                if default_template.exists():
+                    default_html = default_template.read_text(encoding="utf-8")
+            except Exception:
+                default_html = ""
+
+            editor_key = "editor_html"
+            if st_ckeditor is not None:
+                # CKEditor: full WYSIWYG, users don't need to know HTML
+                html_content = st_ckeditor(
+                    default_html,
+                    key=editor_key,
+                    height=320,
+                )
+            elif st_quill is not None:
+                # Quill editor: also WYSIWYG, return HTML for sending
+                editor_key = "editor_quill_html"
+                html_content = st_quill(
+                    html=True,
+                    placeholder="Soạn nội dung email...",
+                    key=editor_key,
+                )
+            else:
+                # Last resort: textarea (not ideal but keeps app usable)
+                editor_key = "editor_html_fallback"
+                html_content = st.text_area(
+                    "Nội dung (HTML)",
+                    value=default_html,
+                    height=320,
+                    key=editor_key,
+                )
+
+            with st.expander("Chèn token nhanh", expanded=False):
+                col_t = st.columns(3)
+                tokens = ["{{Ten}}", "{{Email}}", "{{NgayGui}}"]
+                for i, tk in enumerate(tokens):
+                    if col_t[i].button(tk, key=f"ins_{tk}"):
+                        try:
+                            cur = st.session_state.get(editor_key, "") or ""
+                            st.session_state[editor_key] = f"{cur}{tk}"
+                            _safe_rerun()
+                        except Exception:
+                            pass
 
         st.subheader("File đính kèm")
         st.caption("Nếu recipients chỉ chứa tên file (ví dụ: A.pdf), hãy upload thư mục ZIP chứa các PDF hoặc chọn thư mục gốc.")
@@ -348,14 +422,31 @@ def main() -> None:
                                 return
                             recipients_path = default_recipients
 
-                        if up_template is not None:
-                            template_path = save_upload(up_template, suffix=".html")
+                        if mode == MODE_FILE:
+                            if up_template is not None:
+                                template_path = save_upload(up_template, suffix=".html")
+                            else:
+                                if not default_template.exists():
+                                    st.error("Chưa chọn template và không tìm thấy template.html mặc định.")
+                                    st.session_state["running"] = False
+                                    return
+                                template_path = default_template
                         else:
-                            if not default_template.exists():
-                                st.error("Chưa chọn template và không tìm thấy template.html mặc định.")
+                            # Soạn trực tiếp: ghi ra file tạm để tái sử dụng luồng cũ
+                            content_to_use = (html_content or "").strip()
+                            if not content_to_use:
+                                st.error("Nội dung email đang trống.")
                                 st.session_state["running"] = False
                                 return
-                            template_path = default_template
+                            # Lưu trong uploads/ để các đường dẫn tương đối trong HTML có thể tham chiếu tới tệp trong dự án
+                            try:
+                                editor_tpl = upload_dir / "_editor_template.html"
+                                editor_tpl.write_text(content_to_use, encoding="utf-8")
+                                template_path = editor_tpl
+                            except Exception:
+                                with tempfile.NamedTemporaryFile(delete=False, suffix=".html", mode="w", encoding="utf-8") as tmp_html:
+                                    tmp_html.write(content_to_use)
+                                    template_path = Path(tmp_html.name)
 
                         # Thông báo ban đầu
                         if saved_files:
