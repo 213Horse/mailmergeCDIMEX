@@ -291,7 +291,7 @@ def main() -> None:
 
         # Main form
         st.subheader("Chọn tệp")
-        up_recipients = st.file_uploader("Recipients (.xlsx/.csv)", type=["xlsx", "xls", "csv"], help="Bắt buộc", key="rec_upl")
+        up_recipients = st.file_uploader("Nhập file danh sách khách hàng (.xlsx/.csv)", type=["xlsx", "xls", "csv"], help="Bắt buộc", key="rec_upl")
 
         MODE_FILE = "Dùng file HTML"
         MODE_EDITOR = "Soạn trực tiếp (WYSIWYG)"
@@ -299,7 +299,7 @@ def main() -> None:
             "Cách nhập nội dung email",
             [MODE_FILE, MODE_EDITOR],
             horizontal=True,
-            index=0,
+            index=1,
             key="content_mode",
         )
 
