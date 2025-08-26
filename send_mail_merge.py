@@ -17,8 +17,8 @@ import pandas as pd
 import requests
 from pathlib import Path
 
-REQUIRED_COLS = ["Email", "Ten", "FilePDF"]
-OPTIONAL_COLS = ["Subject", "CC", "BCC"]
+REQUIRED_COLS = ["Email", "Ten"]
+OPTIONAL_COLS = ["Subject", "CC", "BCC", "FilePDF"]
 
 def normalize_field(value: object) -> str:
     try:
@@ -264,7 +264,7 @@ def run_merge(
     for i, row in df.iterrows():
         email = normalize_field(row["Email"])
         ten = normalize_field(row["Ten"])
-        fpdf = normalize_field(row["FilePDF"])
+        fpdf = normalize_field(row.get("FilePDF", ""))
         cc = normalize_field(row.get("CC", ""))
         bcc = normalize_field(row.get("BCC", ""))
         subj_tpl = normalize_field(row.get("Subject", "")) or default_subject
@@ -282,8 +282,10 @@ def run_merge(
         try:
             msg = build_message(from_name, smtp_user, email, cc, bcc, subject, body_html_with_cid, inline_images=inline_imgs)
 
-            resolved_path = _resolve_file_path(fpdf, base)
-            attach_file(msg, resolved_path)
+            # Attach file only when provided
+            if fpdf:
+                resolved_path = _resolve_file_path(fpdf, base)
+                attach_file(msg, resolved_path)
 
             use_starttls = not use_ssl
             send_email_smtp(
