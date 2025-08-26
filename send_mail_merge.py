@@ -109,6 +109,21 @@ def _collect_inline_images(html: str, base_dir: Path | None) -> tuple[str, list]
     # Match src values in <img> tags, supporting single/double quotes and newlines
     pattern = re.compile(r"<img\b[^>]*?src=[\"']([^\"']+)[\"']", re.IGNORECASE | re.DOTALL)
     matches = list({m.group(1).strip() for m in pattern.finditer(html)})
+    project_base = Path(__file__).parent.resolve()
+
+    # Special fixed CID alias: cid:bookmedi_logo -> logomedi.png at project root
+    if "cid:bookmedi_logo" in html:
+        logo_path = project_base / "logomedi.png"
+        if logo_path.exists():
+            try:
+                with open(logo_path, "rb") as f:
+                    data = f.read()
+                img = MIMEImage(data, _subtype="png")
+                img.add_header("Content-ID", "<bookmedi_logo>")
+                img.add_header("Content-Disposition", "inline", filename=logo_path.name)
+                image_parts.append(img)
+            except Exception:
+                pass
 
     for src in matches:
         s = src.strip()
@@ -119,7 +134,12 @@ def _collect_inline_images(html: str, base_dir: Path | None) -> tuple[str, list]
             if not img_path.is_absolute() and base_dir is not None:
                 img_path = Path(base_dir) / img_path
             if not img_path.exists():
-                continue
+                # Fallback: also look under project root
+                alt_path = project_base / Path(s)
+                if alt_path.exists():
+                    img_path = alt_path
+                else:
+                    continue
             mime_type, _ = mimetypes.guess_type(str(img_path))
             # Fallback by extension if mimetype guessing fails
             if not mime_type:

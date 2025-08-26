@@ -347,6 +347,52 @@ def main() -> None:
                     key=editor_key,
                 )
 
+            # Fixed header/footer controls
+            st.markdown("---")
+            st.subheader("Header/Footer cố định")
+            base = Path(__file__).parent
+            header_file = base / "header.html"
+            footer_file = base / "footer.html"
+            try:
+                default_header = header_file.read_text(encoding="utf-8") if header_file.exists() else ""
+            except Exception:
+                default_header = ""
+            try:
+                default_footer = footer_file.read_text(encoding="utf-8") if footer_file.exists() else ""
+            except Exception:
+                default_footer = ""
+
+            with st.expander("Thiết lập Header/Footer", expanded=False):
+                colhf = st.columns(2)
+                header_html = colhf[0].text_area("Header HTML (cố định)", value=default_header, height=180, key="header_html")
+                footer_html = colhf[1].text_area("Footer HTML (cố định)", value=default_footer, height=180, key="footer_html")
+
+                if st.button("Lưu header.html / footer.html", key="save_hf"):
+                    try:
+                        if header_html is not None:
+                            header_file.write_text(header_html, encoding="utf-8")
+                        if footer_html is not None:
+                            footer_file.write_text(footer_html, encoding="utf-8")
+                        st.success("Đã lưu header.html và footer.html")
+                    except Exception as exc:
+                        st.error(f"Không thể lưu header/footer: {exc}")
+
+            st.caption("Upload ảnh (logo, banner...) để chèn vào nội dung; dùng src là tên file, ví dụ: <img src=\"banner.png\">")
+            img_uploads = st.file_uploader("Upload ảnh", type=["png","jpg","jpeg","gif","webp"], accept_multiple_files=True, key="img_upl")
+            if img_uploads:
+                if st.button("Lưu ảnh vào uploads/", key="save_imgs"):
+                    saved = 0
+                    for up in img_uploads:
+                        try:
+                            dest = (Path(__file__).parent / "uploads" / Path(up.name).name)
+                            with open(dest, "wb") as f:
+                                f.write(up.getbuffer())
+                            saved += 1
+                        except Exception as exc:
+                            st.error(f"Không thể lưu {up.name}: {exc}")
+                    if saved:
+                        st.success(f"Đã lưu {saved} ảnh vào thư mục uploads/")
+
             with st.expander("Chèn token nhanh", expanded=False):
                 col_t = st.columns(3)
                 tokens = ["{{Ten}}", "{{Email}}", "{{NgayGui}}"]
@@ -438,14 +484,18 @@ def main() -> None:
                                 st.error("Nội dung email đang trống.")
                                 st.session_state["running"] = False
                                 return
+                            # Gộp header + nội dung + footer
+                            hdr = st.session_state.get("header_html", "") or ""
+                            ftr = st.session_state.get("footer_html", "") or ""
+                            full_html = f"{hdr}\n{content_to_use}\n{ftr}" if (hdr or ftr) else content_to_use
                             # Lưu trong uploads/ để các đường dẫn tương đối trong HTML có thể tham chiếu tới tệp trong dự án
                             try:
                                 editor_tpl = upload_dir / "_editor_template.html"
-                                editor_tpl.write_text(content_to_use, encoding="utf-8")
+                                editor_tpl.write_text(full_html, encoding="utf-8")
                                 template_path = editor_tpl
                             except Exception:
                                 with tempfile.NamedTemporaryFile(delete=False, suffix=".html", mode="w", encoding="utf-8") as tmp_html:
-                                    tmp_html.write(content_to_use)
+                                    tmp_html.write(full_html)
                                     template_path = Path(tmp_html.name)
 
                         # Thông báo ban đầu
