@@ -60,7 +60,17 @@ jobs:
           REPO_PATH: ${{ steps.meta.outputs.repo_path }}
           TAG_SHA: ${{ steps.meta.outputs.tag_sha }}
         run: |
-          ssh -i vps_key -o StrictHostKeyChecking=no ${VPS_USER}@${VPS_HOST} 'bash -s' <<'EOSSH'
+          ssh -i vps_key -o StrictHostKeyChecking=no ${VPS_USER}@${VPS_HOST} \
+            IMAGE_NAME="${IMAGE_NAME}" \
+            REPO_PATH="${REPO_PATH}" \
+            TAG_SHA="${TAG_SHA}" \
+            HOST_PORT="${HOST_PORT}" \
+            CONTAINER_PORT="${CONTAINER_PORT}" \
+            DOMAIN="${DOMAIN}" \
+            GHCR_USERNAME="${GHCR_USERNAME}" \
+            GHCR_TOKEN="${GHCR_TOKEN}" \
+            PROD_ENV_FILE="${PROD_ENV_FILE}" \
+            bash -s <<'EOSSH'
           set -euo pipefail
 
           # ---- Settings (with sane defaults if missing) ----
