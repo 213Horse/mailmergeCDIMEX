@@ -9,6 +9,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+
     env:
       REGISTRY: ghcr.io
       IMAGE_NAME: ${{ secrets.IMAGE_NAME }}
@@ -16,7 +17,7 @@ jobs:
       GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
       VPS_HOST: ${{ secrets.VPS_HOST }}
       VPS_USER: ${{ secrets.VPS_USER }}
-      VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+      VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }} # raw hoặc base64 đều được
       PROD_ENV_FILE: ${{ secrets.PROD_ENV_FILE }}
       DOMAIN: ${{ secrets.DOMAIN }}
       HOST_PORT: ${{ secrets.HOST_PORT }}
@@ -40,9 +41,9 @@ jobs:
           OWNER_LC=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
           IMAGE_LC=$(echo "${IMAGE_NAME}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9._-]+/-/g')
           REPO_PATH=${REGISTRY}/${OWNER_LC}/${IMAGE_LC}
-          echo "repo_path=${REPO_PATH}" >> "$GITHUB_OUTPUT"
-          echo "tag_sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
-          echo "tag_latest=latest" >> "$GITHUB_OUTPUT"
+          echo "repo_path=${REPO_PATH}"       >> "$GITHUB_OUTPUT"
+          echo "tag_sha=${GITHUB_SHA}"        >> "$GITHUB_OUTPUT"
+          echo "tag_latest=latest"            >> "$GITHUB_OUTPUT"
 
       - name: Build and push Docker image
         run: |
@@ -52,21 +53,28 @@ jobs:
           docker push "${{ steps.meta.outputs.repo_path }}:${{ steps.meta.outputs.tag_sha }}"
           docker push "${{ steps.meta.outputs.repo_path }}:${{ steps.meta.outputs.tag_latest }}"
 
-      - name: Prepare SSH key
+      - name: Prepare SSH key & known_hosts
         run: |
           set -e
-          printf "%s" "${VPS_SSH_KEY}" > vps_key
+          # Nếu VPS_SSH_KEY là base64 -> decode; nếu không -> ghi raw
+          (echo "${VPS_SSH_KEY}" | base64 -d > vps_key 2>/dev/null) || echo "${VPS_SSH_KEY}" > vps_key
           chmod 600 vps_key
+          mkdir -p ~/.ssh
+          ssh-keyscan -H "${VPS_HOST}" >> ~/.ssh/known_hosts
 
-      - name: Deploy on VPS over SSH (run repo script)
+      - name: Upload deploy script to server
+        run: |
+          set -e
+          # Script này phải tồn tại trong repo: .github/scripts/deploy.sh
+          # (Không cần chmod +x vì sẽ gọi qua "bash /tmp/deploy.sh")
+          scp -i vps_key -o StrictHostKeyChecking=no .github/scripts/deploy.sh "${VPS_USER}@${VPS_HOST}:/tmp/deploy.sh"
+
+      - name: Deploy on VPS
         env:
           REPO_PATH: ${{ steps.meta.outputs.repo_path }}
           TAG_SHA: ${{ steps.meta.outputs.tag_sha }}
         run: |
           set -e
-          # Copy deploy script to server
-          scp -i vps_key -o StrictHostKeyChecking=no .github/scripts/deploy.sh "${VPS_USER}@${VPS_HOST}:/tmp/deploy.sh"
-          # Run script with needed env vars
           ssh -i vps_key -o StrictHostKeyChecking=no "${VPS_USER}@${VPS_HOST}" \
             IMAGE_NAME="${IMAGE_NAME}" \
             REPO_PATH="${REPO_PATH}" \
