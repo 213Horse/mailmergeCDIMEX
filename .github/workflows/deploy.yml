@@ -1,68 +1,153 @@
-name: Deploy to Server
-
+name: Deploy to VPS (Docker + Nginx)
 on:
   push:
-    branches: [main]
-  workflow_dispatch: {}
+    branches:
+      - main
+      - master
 
 jobs:
-  deploy:
+  build-and-deploy:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     env:
-      SSH_HOST: ${{ secrets.SSH_HOST }}
-      SSH_USER: ${{ secrets.SSH_USER }}
-      SSH_PORT: ${{ secrets.SSH_PORT || '22' }}
-      DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
-      STREAMLIT_PORT: ${{ secrets.STREAMLIT_PORT || '8502' }}
-      STREAMLIT_ADDRESS: ${{ secrets.STREAMLIT_ADDRESS || '0.0.0.0' }}
-
+      REGISTRY: ghcr.io
+      IMAGE_NAME: ${{ secrets.IMAGE_NAME }}
+      GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+      GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_USER: ${{ secrets.VPS_USER }}
+      VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+      PROD_ENV_FILE: ${{ secrets.PROD_ENV_FILE }}
+      DOMAIN: ${{ secrets.DOMAIN }}
+      HOST_PORT: ${{ secrets.HOST_PORT }}
+      CONTAINER_PORT: ${{ secrets.CONTAINER_PORT }}
     steps:
-      - name: Checkout repository
+      - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Validate required envs
-        run: |
-          set -euo pipefail
-          [ -n "${SSH_HOST:-}" ] && [ -n "${SSH_USER:-}" ] && [ -n "${DEPLOY_PATH:-}" ] || {
-            echo "Missing SSH_HOST/SSH_USER/DEPLOY_PATH"; exit 1; }
-
-      - name: Set up SSH agent
-        uses: webfactory/ssh-agent@v0.9.0
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
         with:
-          ssh-private-key: |
-            ${{ secrets.SSH_PRIVATE_KEY }}
+          registry: ${{ env.REGISTRY }}
+          username: ${{ env.GHCR_USERNAME }}
+          password: ${{ env.GHCR_TOKEN }}
 
-      - name: Add server to known_hosts
+      - name: Set image tags
+        id: meta
         run: |
-          mkdir -p ~/.ssh
-          ssh-keyscan -H -p "$SSH_PORT" "$SSH_HOST" >> ~/.ssh/known_hosts
-          chmod 644 ~/.ssh/known_hosts
+          REPO_PATH=${REGISTRY}/${GHCR_USERNAME}/${IMAGE_NAME}
+          echo "repo_path=${REPO_PATH}" >> $GITHUB_OUTPUT
+          echo "tag_sha=${GITHUB_SHA}" >> $GITHUB_OUTPUT
+          echo "tag_latest=latest" >> $GITHUB_OUTPUT
 
-      - name: SSH smoke test (publickey only)
+      - name: Build and push Docker image
         run: |
+          docker build -t "${{ steps.meta.outputs.repo_path }}:${{ steps.meta.outputs.tag_sha }}" -t "${{ steps.meta.outputs.repo_path }}:${{ steps.meta.outputs.tag_latest }}" .
+          docker push "${{ steps.meta.outputs.repo_path }}:${{ steps.meta.outputs.tag_sha }}"
+          docker push "${{ steps.meta.outputs.repo_path }}:${{ steps.meta.outputs.tag_latest }}"
+
+      - name: Prepare SSH key
+        run: |
+          echo "${VPS_SSH_KEY}" > vps_key
+          chmod 600 vps_key
+
+      - name: Deploy on VPS over SSH
+        env:
+          REPO_PATH: ${{ steps.meta.outputs.repo_path }}
+          TAG_SHA: ${{ steps.meta.outputs.tag_sha }}
+        run: |
+          ssh -i vps_key -o StrictHostKeyChecking=no ${VPS_USER}@${VPS_HOST} 'bash -s' <<'EOSSH'
           set -euo pipefail
-          ssh -vvv -o BatchMode=yes -o PreferredAuthentications=publickey \
-            -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "echo 'SSH OK:' \$(whoami)@\$(hostname)"
 
-      - name: Create remote directory
-        run: |
-          set -euo pipefail
-          ssh -o BatchMode=yes -o PreferredAuthentications=publickey \
-            -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "mkdir -p '$DEPLOY_PATH'"
+          # ---- Settings (with sane defaults if missing) ----
+          IMAGE_NAME="${IMAGE_NAME}"
+          REPO_PATH="${REPO_PATH}"
+          TAG_SHA="${TAG_SHA}"
+          APP_DIR="/opt/${IMAGE_NAME}"
+          HOST_PORT="${HOST_PORT:-9000}"
+          CONTAINER_PORT="${CONTAINER_PORT:-7001}"
+          DOMAIN_NAME="${DOMAIN:-example.com}"
 
-      - name: Rsync source to server
-        run: |
-          set -euo pipefail
-          rsync -avz --delete \
-            --exclude '.git' \
-            --exclude '.venv' \
-            --exclude '__pycache__' \
-            -e "ssh -o BatchMode=yes -o PreferredAuthentications=publickey -p $SSH_PORT" \
-            ./ "$SSH_USER@$SSH_HOST:$DEPLOY_PATH/"
+          sudo mkdir -p "$APP_DIR"
 
-      - name: Run remote deploy script
-        run: |
-          set -euo pipefail
-          ssh -o BatchMode=yes -o PreferredAuthentications=publickey \
-            -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
-            "cd '$DEPLOY_PATH' && chmod +x scripts/deploy.sh && STREAMLIT_PORT='$STREAMLIT_PORT' STREAMLIT_ADDRESS='$STREAMLIT_ADDRESS' bash scripts/deploy.sh"
+          # Write .env from secret
+          if [ -n "${PROD_ENV_FILE}" ]; then
+            echo "${PROD_ENV_FILE}" | sudo tee "$APP_DIR/.env" > /dev/null
+          else
+            sudo touch "$APP_DIR/.env"
+          fi
+
+          # Install docker compose plugin if missing
+          if ! command -v docker >/dev/null; then
+            echo "Docker is required on the server. Please install Docker and rerun." >&2
+            exit 1
+          fi
+
+          if ! docker compose version >/dev/null 2>&1; then
+            # Try to install compose plugin for Debian/Ubuntu
+            if [ -f /etc/os-release ]; then
+              . /etc/os-release
+              if [ "${ID}" = "ubuntu" ] || [ "${ID}" = "debian" ]; then
+                sudo apt-get update -y
+                sudo apt-get install -y docker-compose-plugin
+              fi
+            fi
+          fi
+
+          # Docker login to GHCR to pull private images
+          echo "${GHCR_TOKEN}" | sudo docker login ghcr.io -u "${GHCR_USERNAME}" --password-stdin
+
+          # Write docker-compose.yml
+          sudo tee "$APP_DIR/docker-compose.yml" > /dev/null <<YAML
+          version: "3.8"
+          services:
+            app:
+              image: ${REPO_PATH}:${TAG_SHA}
+              container_name: ${IMAGE_NAME}
+              restart: unless-stopped
+              env_file:
+                - .env
+              ports:
+                - "127.0.0.1:${HOST_PORT}:${CONTAINER_PORT}"
+              # If your app needs a working directory or command, set them via env or modify here
+          YAML
+
+          # Pull and start the app
+          sudo docker compose -f "$APP_DIR/docker-compose.yml" pull app
+          sudo docker compose -f "$APP_DIR/docker-compose.yml" up -d --remove-orphans
+
+          # ---- Nginx reverse proxy ----
+          if command -v nginx >/dev/null 2>&1; then
+            SITES_AVAILABLE="/etc/nginx/sites-available/${IMAGE_NAME}.conf"
+            SITES_ENABLED="/etc/nginx/sites-enabled/${IMAGE_NAME}.conf"
+            sudo tee "$SITES_AVAILABLE" > /dev/null <<NGINX
+            server {
+              listen 80;
+              server_name ${DOMAIN_NAME};
+
+              location / {
+                proxy_pass http://127.0.0.1:${HOST_PORT};
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+                proxy_read_timeout 300;
+              }
+            }
+            NGINX
+
+            if [ ! -e "$SITES_ENABLED" ]; then
+              sudo ln -s "$SITES_AVAILABLE" "$SITES_ENABLED"
+            fi
+            sudo nginx -t
+            sudo systemctl reload nginx
+          else
+            echo "Nginx not installed; skipping Nginx configuration." >&2
+          fi
+          EOSSH
+
+      - name: Cleanup
+        if: always()
+        run: rm -f vps_key

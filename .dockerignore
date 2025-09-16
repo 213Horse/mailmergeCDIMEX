@@ -1,0 +1,20 @@
+__pycache__
+.pytest_cache
+.mypy_cache
+.venv
+*.pyc
+*.pyo
+*.pyd
+*.egg-info
+.git
+.github
+uploads
+*.xlsx
+*.pdf
+*.png
+*.jpg
+*.jpeg
+*.DS_Store
+Trần Nguyễn Thanh Ngân - 7.7
+Võ Thị Thanh Lam - 24.7
+
