@@ -135,7 +135,7 @@ jobs:
           if command -v nginx >/dev/null 2>&1; then
             SITES_AVAILABLE="/etc/nginx/sites-available/${SAFE_IMAGE_NAME}.conf"
             SITES_ENABLED="/etc/nginx/sites-enabled/${SAFE_IMAGE_NAME}.conf"
-            sudo tee "$SITES_AVAILABLE" > /dev/null <<NGINX
+            sudo tee "$SITES_AVAILABLE" > /dev/null <<'NGINX'
             server {
               listen 80;
               server_name ${DOMAIN_NAME};
