@@ -1,7 +1,7 @@
-name: Deploy to VPS (Docker + Nginx)
+name: Deploy to VPS (Docker)
 on:
   push:
-    branches: [ main, master ]
+    branches: [main, master]
 
 jobs:
   build-and-deploy:
@@ -25,12 +25,6 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
-
-      # Chống lỗi CRLF nếu file được sửa trên Windows
-      - name: Fix line endings (optional but recommended)
-        run: |
-          sudo apt-get update -y && sudo apt-get install -y dos2unix
-          dos2unix .github/workflows/deploy.yml || true
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -83,27 +77,21 @@ jobs:
             bash -s <<'EOSSH'
           set -euo pipefail
 
-          # ---- Settings (with sane defaults if missing) ----
           SAFE_IMAGE_NAME=$(echo "${IMAGE_NAME:-app}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9._-]+/-/g')
           APP_DIR="/opt/${SAFE_IMAGE_NAME}"
           HOST_PORT="${HOST_PORT:-9000}"
           CONTAINER_PORT="${CONTAINER_PORT:-7001}"
-          DOMAIN_NAME="${DOMAIN:-example.com}"
 
           sudo mkdir -p "$APP_DIR"
 
-          # Write .env from secret
+          # Write .env
           if [ -n "${PROD_ENV_FILE:-}" ]; then
             printf "%s" "${PROD_ENV_FILE}" | sudo tee "$APP_DIR/.env" > /dev/null
           else
             sudo touch "$APP_DIR/.env"
           fi
 
-          # Ensure docker & compose
-          if ! command -v docker >/dev/null 2>&1; then
-            echo "Docker is required on the server. Please install Docker and rerun." >&2
-            exit 1
-          fi
+          # Ensure docker compose
           if ! docker compose version >/dev/null 2>&1; then
             if [ -f /etc/os-release ]; then
               . /etc/os-release
@@ -114,7 +102,7 @@ jobs:
             fi
           fi
 
-          # Login GHCR to pull
+          # Login GHCR
           echo "${GHCR_TOKEN}" | sudo docker login ghcr.io -u "${GHCR_USERNAME}" --password-stdin
 
           # docker-compose.yml
@@ -133,48 +121,7 @@ jobs:
           export COMPOSE_PROJECT_NAME="${SAFE_IMAGE_NAME}"
           sudo -E docker compose -f "$APP_DIR/docker-compose.yml" pull app
           sudo -E docker compose -f "$APP_DIR/docker-compose.yml" up -d --remove-orphans
-
-          # ---- Nginx reverse proxy ----
-          if command -v nginx >/dev/null 2>&1; then
-            SITES_AVAILABLE="/etc/nginx/sites-available/${SAFE_IMAGE_NAME}.conf"
-            SITES_ENABLED="/etc/nginx/sites-enabled/${SAFE_IMAGE_NAME}.conf"
-
-            # unquoted heredoc + escape Nginx vars so shell won't expand them
-            sudo tee "$SITES_AVAILABLE" > /dev/null <<NGINX
-server {
-  listen 80;
-  server_name ${DOMAIN_NAME};
-
-  location / {
-    proxy_pass http://127.0.0.1:${HOST_PORT};
-    proxy_set_header Host \$host;
-    proxy_set_header X-Real-IP \$remote_addr;
-    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto \$scheme;
-    proxy_read_timeout 300;
-  }
-
-  # Optional: protect /api with rate limit (zone 'one' must be defined in nginx.conf http{})
-  location /api/ {
-    limit_req zone=one burst=20 nodelay;
-    proxy_pass http://127.0.0.1:${HOST_PORT};
-    proxy_set_header Host \$host;
-    proxy_set_header X-Real-IP \$remote_addr;
-    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto \$scheme;
-  }
-}
-NGINX
-
-            if [ ! -e "$SITES_ENABLED" ]; then
-              sudo ln -s "$SITES_AVAILABLE" "$SITES_ENABLED"
-            fi
-            sudo nginx -t
-            sudo systemctl reload nginx
-          else
-            echo "Nginx not installed; skipping Nginx configuration." >&2
-          fi
-EOSSH
+          EOSSH
 
       - name: Cleanup
         if: always()
