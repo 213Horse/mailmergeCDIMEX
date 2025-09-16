@@ -1,9 +1,7 @@
 name: Deploy to VPS (Docker + Nginx)
 on:
   push:
-    branches:
-      - main
-      - master
+    branches: [ main, master ]
 
 jobs:
   build-and-deploy:
@@ -23,9 +21,16 @@ jobs:
       DOMAIN: ${{ secrets.DOMAIN }}
       HOST_PORT: ${{ secrets.HOST_PORT }}
       CONTAINER_PORT: ${{ secrets.CONTAINER_PORT }}
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+
+      # Chống lỗi CRLF nếu file được sửa trên Windows
+      - name: Fix line endings (optional but recommended)
+        run: |
+          sudo apt-get update -y && sudo apt-get install -y dos2unix
+          dos2unix .github/workflows/deploy.yml || true
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -37,22 +42,26 @@ jobs:
       - name: Set image tags
         id: meta
         run: |
+          set -e
           OWNER_LC=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
           IMAGE_LC=$(echo "${IMAGE_NAME}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9._-]+/-/g')
           REPO_PATH=${REGISTRY}/${OWNER_LC}/${IMAGE_LC}
-          echo "repo_path=${REPO_PATH}" >> $GITHUB_OUTPUT
-          echo "tag_sha=${GITHUB_SHA}" >> $GITHUB_OUTPUT
-          echo "tag_latest=latest" >> $GITHUB_OUTPUT
+          echo "repo_path=${REPO_PATH}" >> "$GITHUB_OUTPUT"
+          echo "tag_sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "tag_latest=latest" >> "$GITHUB_OUTPUT"
 
       - name: Build and push Docker image
         run: |
-          docker build -t "${{ steps.meta.outputs.repo_path }}:${{ steps.meta.outputs.tag_sha }}" -t "${{ steps.meta.outputs.repo_path }}:${{ steps.meta.outputs.tag_latest }}" .
+          set -e
+          docker build -t "${{ steps.meta.outputs.repo_path }}:${{ steps.meta.outputs.tag_sha }}" \
+                       -t "${{ steps.meta.outputs.repo_path }}:${{ steps.meta.outputs.tag_latest }}" .
           docker push "${{ steps.meta.outputs.repo_path }}:${{ steps.meta.outputs.tag_sha }}"
           docker push "${{ steps.meta.outputs.repo_path }}:${{ steps.meta.outputs.tag_latest }}"
 
       - name: Prepare SSH key
         run: |
-          echo "${VPS_SSH_KEY}" > vps_key
+          set -e
+          printf "%s" "${VPS_SSH_KEY}" > vps_key
           chmod 600 vps_key
 
       - name: Deploy on VPS over SSH
@@ -60,7 +69,8 @@ jobs:
           REPO_PATH: ${{ steps.meta.outputs.repo_path }}
           TAG_SHA: ${{ steps.meta.outputs.tag_sha }}
         run: |
-          ssh -i vps_key -o StrictHostKeyChecking=no ${VPS_USER}@${VPS_HOST} \
+          set -e
+          ssh -i vps_key -o StrictHostKeyChecking=no "${VPS_USER}@${VPS_HOST}" \
             IMAGE_NAME="${IMAGE_NAME}" \
             REPO_PATH="${REPO_PATH}" \
             TAG_SHA="${TAG_SHA}" \
@@ -74,10 +84,7 @@ jobs:
           set -euo pipefail
 
           # ---- Settings (with sane defaults if missing) ----
-          IMAGE_NAME="${IMAGE_NAME}"
-          REPO_PATH="${REPO_PATH}"
-          TAG_SHA="${TAG_SHA}"
-          SAFE_IMAGE_NAME=$(echo "${IMAGE_NAME}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9._-]+/-/g')
+          SAFE_IMAGE_NAME=$(echo "${IMAGE_NAME:-app}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9._-]+/-/g')
           APP_DIR="/opt/${SAFE_IMAGE_NAME}"
           HOST_PORT="${HOST_PORT:-9000}"
           CONTAINER_PORT="${CONTAINER_PORT:-7001}"
@@ -86,20 +93,18 @@ jobs:
           sudo mkdir -p "$APP_DIR"
 
           # Write .env from secret
-          if [ -n "${PROD_ENV_FILE}" ]; then
-            echo "${PROD_ENV_FILE}" | sudo tee "$APP_DIR/.env" > /dev/null
+          if [ -n "${PROD_ENV_FILE:-}" ]; then
+            printf "%s" "${PROD_ENV_FILE}" | sudo tee "$APP_DIR/.env" > /dev/null
           else
             sudo touch "$APP_DIR/.env"
           fi
 
-          # Install docker compose plugin if missing
-          if ! command -v docker >/dev/null; then
+          # Ensure docker & compose
+          if ! command -v docker >/dev/null 2>&1; then
             echo "Docker is required on the server. Please install Docker and rerun." >&2
             exit 1
           fi
-
           if ! docker compose version >/dev/null 2>&1; then
-            # Try to install compose plugin for Debian/Ubuntu
             if [ -f /etc/os-release ]; then
               . /etc/os-release
               if [ "${ID}" = "ubuntu" ] || [ "${ID}" = "debian" ]; then
@@ -109,10 +114,10 @@ jobs:
             fi
           fi
 
-          # Docker login to GHCR to pull private images
+          # Login GHCR to pull
           echo "${GHCR_TOKEN}" | sudo docker login ghcr.io -u "${GHCR_USERNAME}" --password-stdin
 
-          # Write docker-compose.yml
+          # docker-compose.yml
           sudo tee "$APP_DIR/docker-compose.yml" > /dev/null <<YAML
           services:
             app:
@@ -123,10 +128,8 @@ jobs:
                 - .env
               ports:
                 - "127.0.0.1:${HOST_PORT}:${CONTAINER_PORT}"
-              # If your app needs a working directory or command, set them via env or modify here
           YAML
 
-          # Pull and start the app
           export COMPOSE_PROJECT_NAME="${SAFE_IMAGE_NAME}"
           sudo -E docker compose -f "$APP_DIR/docker-compose.yml" pull app
           sudo -E docker compose -f "$APP_DIR/docker-compose.yml" up -d --remove-orphans
@@ -135,21 +138,33 @@ jobs:
           if command -v nginx >/dev/null 2>&1; then
             SITES_AVAILABLE="/etc/nginx/sites-available/${SAFE_IMAGE_NAME}.conf"
             SITES_ENABLED="/etc/nginx/sites-enabled/${SAFE_IMAGE_NAME}.conf"
-            sudo tee "$SITES_AVAILABLE" > /dev/null <<'NGINX'
-            server {
-              listen 80;
-              server_name ${DOMAIN_NAME};
 
-              location / {
-                proxy_pass http://127.0.0.1:${HOST_PORT};
-                proxy_set_header Host $host;
-                proxy_set_header X-Real-IP $remote_addr;
-                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-                proxy_set_header X-Forwarded-Proto $scheme;
-                proxy_read_timeout 300;
-              }
-            }
-            NGINX
+            # unquoted heredoc + escape Nginx vars so shell won't expand them
+            sudo tee "$SITES_AVAILABLE" > /dev/null <<NGINX
+server {
+  listen 80;
+  server_name ${DOMAIN_NAME};
+
+  location / {
+    proxy_pass http://127.0.0.1:${HOST_PORT};
+    proxy_set_header Host \$host;
+    proxy_set_header X-Real-IP \$remote_addr;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto \$scheme;
+    proxy_read_timeout 300;
+  }
+
+  # Optional: protect /api with rate limit (zone 'one' must be defined in nginx.conf http{})
+  location /api/ {
+    limit_req zone=one burst=20 nodelay;
+    proxy_pass http://127.0.0.1:${HOST_PORT};
+    proxy_set_header Host \$host;
+    proxy_set_header X-Real-IP \$remote_addr;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto \$scheme;
+  }
+}
+NGINX
 
             if [ ! -e "$SITES_ENABLED" ]; then
               sudo ln -s "$SITES_AVAILABLE" "$SITES_ENABLED"
@@ -159,7 +174,7 @@ jobs:
           else
             echo "Nginx not installed; skipping Nginx configuration." >&2
           fi
-          EOSSH
+EOSSH
 
       - name: Cleanup
         if: always()
