@@ -77,7 +77,8 @@ jobs:
           IMAGE_NAME="${IMAGE_NAME}"
           REPO_PATH="${REPO_PATH}"
           TAG_SHA="${TAG_SHA}"
-          APP_DIR="/opt/${IMAGE_NAME}"
+          SAFE_IMAGE_NAME=$(echo "${IMAGE_NAME}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9._-]+/-/g')
+          APP_DIR="/opt/${SAFE_IMAGE_NAME}"
           HOST_PORT="${HOST_PORT:-9000}"
           CONTAINER_PORT="${CONTAINER_PORT:-7001}"
           DOMAIN_NAME="${DOMAIN:-example.com}"
@@ -113,11 +114,10 @@ jobs:
 
           # Write docker-compose.yml
           sudo tee "$APP_DIR/docker-compose.yml" > /dev/null <<YAML
-          version: "3.8"
           services:
             app:
               image: ${REPO_PATH}:${TAG_SHA}
-              container_name: ${IMAGE_NAME}
+              container_name: ${SAFE_IMAGE_NAME}
               restart: unless-stopped
               env_file:
                 - .env
@@ -127,13 +127,14 @@ jobs:
           YAML
 
           # Pull and start the app
-          sudo docker compose -f "$APP_DIR/docker-compose.yml" pull app
-          sudo docker compose -f "$APP_DIR/docker-compose.yml" up -d --remove-orphans
+          export COMPOSE_PROJECT_NAME="${SAFE_IMAGE_NAME}"
+          sudo -E docker compose -f "$APP_DIR/docker-compose.yml" pull app
+          sudo -E docker compose -f "$APP_DIR/docker-compose.yml" up -d --remove-orphans
 
           # ---- Nginx reverse proxy ----
           if command -v nginx >/dev/null 2>&1; then
-            SITES_AVAILABLE="/etc/nginx/sites-available/${IMAGE_NAME}.conf"
-            SITES_ENABLED="/etc/nginx/sites-enabled/${IMAGE_NAME}.conf"
+            SITES_AVAILABLE="/etc/nginx/sites-available/${SAFE_IMAGE_NAME}.conf"
+            SITES_ENABLED="/etc/nginx/sites-enabled/${SAFE_IMAGE_NAME}.conf"
             sudo tee "$SITES_AVAILABLE" > /dev/null <<NGINX
             server {
               listen 80;
