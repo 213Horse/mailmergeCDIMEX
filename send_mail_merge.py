@@ -20,9 +20,18 @@ from pathlib import Path
 REQUIRED_COLS = ["Email", "Ten"]
 OPTIONAL_COLS = ["Subject", "CC", "BCC", "FilePDF"]
 
+import re
+import pandas as pd  # local import for script
+
+def is_valid_email(email: str) -> bool:
+    """Very basic check for email format."""
+    if not email or "@" not in email:
+        return False
+    # Simple regex for basic validation
+    return bool(re.match(r"[^@]+@[^@]+\.[^@]+", email))
+
 def normalize_field(value: object) -> str:
     try:
-        import pandas as pd  # local import for script
         if isinstance(value, float) and value != value:  # NaN check without pandas
             return ""
         if 'pandas' in str(type(value)).lower():
@@ -208,6 +217,8 @@ def send_email_smtp(host, port, user, password, use_starttls, msg, to_email, cc=
         print(f"[DRY-RUN] Would send to: {recipients}")
         return
 
+    # In Python 3.3+, smtplib.send_message is preferred as it handles
+    # non-ASCII headers and body properly (using SMTPUTF8 if needed).
     if use_starttls:
         context = ssl.create_default_context()
         with smtplib.SMTP(host, port) as server:
@@ -215,11 +226,11 @@ def send_email_smtp(host, port, user, password, use_starttls, msg, to_email, cc=
             server.starttls(context=context)
             server.ehlo()
             server.login(user, password)
-            server.sendmail(msg["From"], recipients, msg.as_string())
+            server.send_message(msg, from_addr=msg["From"], to_addrs=recipients)
     else:
         with smtplib.SMTP_SSL(host, port) as server:
             server.login(user, password)
-            server.sendmail(msg["From"], recipients, msg.as_string())
+            server.send_message(msg, from_addr=msg["From"], to_addrs=recipients)
 
 def run_merge(
     recipients: str,
@@ -277,6 +288,13 @@ def run_merge(
         subject = render_template(subj_tpl, tokens)
         body_html = render_template(html, tokens)
         # Prepare inline images referenced by template
+        if not email or not is_valid_email(email):
+            failed += 1
+            err_msg = f"Email không hợp lệ: '{email}'. Có thể bạn đã nhập nhầm Tên vào cột Email?"
+            errors.append((email or "N/A", err_msg))
+            log(f"[ERR] {email} -> {err_msg}")
+            continue
+
         body_html_with_cid, inline_imgs = _collect_inline_images(body_html, tpl_path.parent)
 
         try:

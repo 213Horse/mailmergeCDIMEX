@@ -269,7 +269,7 @@ def main() -> None:
         smtp_provider = st.sidebar.selectbox(
             "Provider",
             ["Gmail (STARTTLS)", "Outlook (STARTTLS)", "Custom"],
-            index=0,
+            index=1,
         )
 
         host_default = "smtp.gmail.com" if smtp_provider == "Gmail (STARTTLS)" else (
@@ -279,12 +279,12 @@ def main() -> None:
         smtp_host = st.sidebar.text_input("SMTP Host", value=host_default)
         smtp_port = st.sidebar.number_input("SMTP Port", min_value=1, max_value=65535, value=587)
         use_ssl = st.sidebar.checkbox("Use SSL (SMTPS)", value=False)
-        smtp_user = st.sidebar.text_input("SMTP User (email)", value="")
-        smtp_pass = st.sidebar.text_input("SMTP Password/App Password", type="password", value="")
+        smtp_user = st.sidebar.text_input("SMTP User (email)", value="admin@bookmedi.vn")
+        smtp_pass = st.sidebar.text_input("SMTP Password/App Password", type="password", value="T@omoiMK")
         from_name = st.sidebar.text_input("From Name", value="Bookmedi")
         default_subject = st.sidebar.text_input(
             "Default Subject",
-            value="Kết quả bài thi Versant level 1 - {{Ten}}",
+            value="Kết quả bài thi Versant Professional English Test  - {{Ten}}",
         )
         dry_run = st.sidebar.checkbox("Dry-run (không gửi thật)", value=True)
         rate_delay = st.sidebar.slider("Delay giữa mỗi email (giây)", 0.0, 10.0, 1.5, 0.5)

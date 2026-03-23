@@ -1,110 +1,75 @@
-# Bookmedi Mail Merge
+# 📧 Cdimex Mail Merge
 
-Ứng dụng gửi email hàng loạt kèm file PDF riêng cho từng người nhận.
+Ứng dụng gửi email hàng loạt kèm file PDF cho từng khách hàng.
 
-## Cài đặt nhanh (cho người không biết lập trình)
+## 🚀 Cài đặt và chạy (1 lệnh)
 
-### Bước 1: Tải và giải nén
-1. Tải toàn bộ thư mục này về máy
-2. Giải nén vào một thư mục (ví dụ: Desktop)
+### Windows:
+1. **Cài đặt:** Double-click `install.bat`
+2. **Chạy:** Double-click `run.bat`
 
-### Bước 2: Chạy cài đặt tự động
-1. Mở Terminal (macOS/Linux) hoặc Command Prompt (Windows)
-2. Di chuyển vào thư mục đã giải nén:
-   ```bash
-   cd đường/dẫn/tới/thư/mục
-   ```
-3. Chạy script cài đặt:
-   ```bash
-   python install.py
-   ```
-4. Làm theo hướng dẫn trên màn hình
+### macOS/Linux:
+1. **Cài đặt:** `./install.sh`
+2. **Chạy:** `./run.sh`
 
-### Bước 3: Chạy ứng dụng
-- **Windows**: Double-click file `run_gui.bat`
-- **macOS/Linux**: Double-click file `run_gui.sh` hoặc chạy `./run_gui.sh`
+## 📋 Yêu cầu
 
-Trình duyệt sẽ tự động mở tại `http://localhost:8501`
+- Python 3.8+ (sẽ được kiểm tra tự động)
+- Kết nối Internet (để tải thư viện)
 
-## Cách sử dụng
+## 🎯 Chức năng
 
-### 1. Chuẩn bị file
-- **recipients.xlsx**: Danh sách người nhận (Email, Ten, FilePDF, Subject, CC, BCC)
-- **template.html**: Mẫu email HTML
-- **PDF files**: Các file PDF cần đính kèm
+- ✅ Gửi email hàng loạt từ file Excel/CSV
+- ✅ Soạn nội dung email trực tiếp (WYSIWYG)
+- ✅ Gửi kèm file PDF riêng cho từng khách hàng
+- ✅ Hỗ trợ token động: `{{Ten}}`, `{{Email}}`, `{{NgayGui}}`
+- ✅ Quản lý file và thư mục
+- ✅ Giao diện web đẹp và dễ sử dụng
 
-### 2. Cấu hình SMTP
-Trong giao diện web, điền thông tin SMTP:
-- **Gmail**: smtp.gmail.com, port 587, dùng App Password
-- **Outlook**: smtp.office365.com, port 587, dùng App Password
+## 📁 File quan trọng
 
-### 3. Gửi email
-1. Upload file recipients.xlsx và template.html
-2. Điền thông tin SMTP
-3. Bật "Dry-run" để thử trước
-4. Bấm "Gửi Email"
+| File | Mô tả |
+|------|-------|
+| `install.bat` / `install.sh` | Cài đặt tự động |
+| `run.bat` / `run.sh` | Chạy ứng dụng |
+| `check_system.bat` / `check_system.sh` | Kiểm tra hệ thống |
+| `recipients.xlsx` | File danh sách khách hàng mẫu |
+| `template.html` | Template email mẫu |
+| `uploads/` | Thư mục chứa file PDF, ảnh |
 
-## Cấu trúc file recipients.xlsx
+## ⚙️ Cấu hình SMTP
 
-| Cột | Bắt buộc | Mô tả |
-|-----|----------|-------|
-| Email | ✓ | Email người nhận |
-| Ten | ✓ | Tên người nhận (dùng trong template) |
-| FilePDF | ✓ | Đường dẫn file PDF hoặc URL |
-| Subject | | Tiêu đề email (có thể dùng {{Ten}}) |
-| CC | | Email CC (phân cách bằng dấu phẩy) |
-| BCC | | Email BCC (phân cách bằng dấu phẩy) |
+### Gmail:
+- Host: `smtp.gmail.com`
+- Port: `587`
+- Password: App Password (không phải mật khẩu thường)
 
-## Template HTML
+### Outlook:
+- Host: `smtp.office365.com`
+- Port: `587`
 
-Sử dụng `{{Ten}}`, `{{Email}}`, `{{NgayGui}}` trong template để thay thế động.
+## 🔧 Xử lý sự cố
 
-Ví dụ:
-```html
-<p>Dear bạn {{Ten}},</p>
-<p>Bookmedi gửi bạn kết quả bài thi Versant level 1.</p>
-```
+### Lỗi cài đặt:
+- Chạy `check_system.bat` / `check_system.sh` để kiểm tra
+- Đảm bảo có kết nối Internet
+- Cài đặt Python từ https://python.org
 
-## Cách sử dụng nâng cao
+### Lỗi gửi email:
+- Kiểm tra thông tin SMTP
+- Bật "Dry-run" để test trước
+- Kiểm tra App Password cho Gmail
 
-### Gửi bằng Command Line
-```bash
-python send_mail_merge.py \
-  --recipients recipients.xlsx \
-  --template template.html \
-  --smtp-host smtp.gmail.com \
-  --smtp-port 587 \
-  --smtp-user your-email@gmail.com \
-  --smtp-pass your-app-password \
-  --from-name "Bookmedi" \
-  --dry-run
-```
+## 📖 Hướng dẫn chi tiết
 
-### Deploy lên server
-1. Upload toàn bộ code lên server
-2. Chạy `python install.py` trên server
-3. Chạy `streamlit run streamlit_app.py --server.port 8501 --server.address 0.0.0.0`
-4. Truy cập qua IP server:port
+- **Hướng dẫn nhanh:** `QUICK_START.md`
+- **Hướng dẫn đầy đủ:** `HUONG_DAN_SU_DUNG.md`
 
-## Xử lý lỗi thường gặp
+## ⚠️ Lưu ý
 
-### Lỗi "No module named pandas"
-- Chạy lại `python install.py`
-- Đảm bảo đang dùng Python 3.8+
+- **Giữ cửa sổ Terminal/Command Prompt mở** khi sử dụng
+- **Test trước** bằng chế độ "Dry-run"
+- **Backup dữ liệu** trước khi gửi hàng loạt
 
-### Lỗi SMTP
-- Kiểm tra email/password
-- Gmail: Bật 2FA và tạo App Password
-- Outlook: Bật SMTP AUTH
-
-### File PDF không tìm thấy
-- Kiểm tra đường dẫn trong cột FilePDF
-- Dùng đường dẫn tuyệt đối hoặc URL
-- Điền Base directory trong giao diện web
-
-## Hỗ trợ
-
-Nếu gặp vấn đề, hãy:
-1. Kiểm tra log trong giao diện web
-2. Chạy với `--dry-run` trước
-3. Liên hệ admin để được hỗ trợ
+---
+**Phát triển bởi:** Cdimex Team

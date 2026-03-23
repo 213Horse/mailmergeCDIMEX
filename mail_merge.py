@@ -54,7 +54,7 @@ html_template = dedent(
         <hr style="border: none; border-top: 1px solid #ccc; margin: 16px 0;"/>
         <p>
           <strong>BOOKMEDI.VN Customer Service</strong><br/>
-          Office: 99A Nguyen Van Troi St, Ward 11, Phu Nhuan Dist, Ho Chi Minh City, Vietnam<br/>
+          Office: 99A Nguyen Van Troi St, Ward Phu Nhuan, Ho Chi Minh City, Vietnam<br/>
           Email: <a href="mailto:admin@bookmedi.vn">admin@bookmedi.vn</a>
           | Phone: (028) 399 705 79 | Mobile:
           <a href="tel:0898536989">0898 536 989</a><br/>
