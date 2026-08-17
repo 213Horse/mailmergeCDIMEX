@@ -4,8 +4,10 @@ set -euo pipefail
 # Chuẩn hóa tên container/app
 SAFE_IMAGE_NAME=$(echo "${IMAGE_NAME:-app}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9._-]+/-/g')
 APP_DIR="/opt/${SAFE_IMAGE_NAME}"
-HOST_PORT="${HOST_PORT:-6520}"
-CONTAINER_PORT="${CONTAINER_PORT:-6520}"
+HOST_PORT_RAW="${HOST_PORT:-}"
+CONTAINER_PORT_RAW="${CONTAINER_PORT:-}"
+HOST_PORT="${HOST_PORT_RAW:-6520}"
+CONTAINER_PORT="${CONTAINER_PORT_RAW:-6520}"
 
 echo "🚀 Deploying $SAFE_IMAGE_NAME (image: ${REPO_PATH}:${TAG_SHA})"
 
@@ -21,6 +23,14 @@ elif [ -n "${PROD_ENV_FILE:-}" ]; then
   printf "%s" "${PROD_ENV_FILE}" | sudo tee "$APP_DIR/.env" > /dev/null
 else
   sudo touch "$APP_DIR/.env"
+fi
+
+# Nếu không truyền CONTAINER_PORT, ưu tiên đọc từ .env (STREAMLIT_SERVER_PORT)
+if [ -z "${CONTAINER_PORT_RAW}" ]; then
+  ENV_STREAMLIT_PORT="$(sudo awk -F= '/^STREAMLIT_SERVER_PORT=/{p=$2} END{print p}' "$APP_DIR/.env" | tr -d '\r' | tr -d ' ')"
+  if [ -n "${ENV_STREAMLIT_PORT}" ]; then
+    CONTAINER_PORT="${ENV_STREAMLIT_PORT}"
+  fi
 fi
 
 # Đảm bảo docker compose plugin có sẵn
@@ -72,6 +82,24 @@ YAML
 export COMPOSE_PROJECT_NAME="${SAFE_IMAGE_NAME}"
 sudo -E ${DOCKER_COMPOSE_CMD} -f "$APP_DIR/docker-compose.yml" pull app
 sudo -E ${DOCKER_COMPOSE_CMD} -f "$APP_DIR/docker-compose.yml" up -d --remove-orphans
+
+# Post-deploy quick diagnostics (giúp bắt lỗi sai port/crash/firewall)
+echo "🔎 Checking container status..."
+sudo docker ps --filter "name=^/${SAFE_IMAGE_NAME}$" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" || true
+
+echo "🔎 Checking local HTTP on VPS (host port: ${HOST_PORT})..."
+if command -v curl >/dev/null 2>&1; then
+  # Streamlit health endpoint (newer versions) may exist; fallback to /
+  (curl -fsS "http://127.0.0.1:${HOST_PORT}/_stcore/health" >/dev/null 2>&1 \
+    || curl -fsS "http://127.0.0.1:${HOST_PORT}/" >/dev/null 2>&1) \
+    && echo "✅ Local curl OK" \
+    || echo "⚠️ Local curl FAILED (check logs below)"
+else
+  echo "⚠️ curl not found; skipping HTTP check"
+fi
+
+echo "🧾 Last container logs (tail)..."
+sudo docker logs --tail 120 "${SAFE_IMAGE_NAME}" 2>&1 || true
 
 # Reload Nginx nếu có
 if command -v nginx >/dev/null 2>&1; then
