@@ -57,6 +57,11 @@ jobs:
       - name: Prepare SSH key & known_hosts
         run: |
           set -e
+          # Normalize secrets (remove accidental whitespace/newlines)
+          VPS_HOST="$(printf "%s" "${VPS_HOST:-}" | tr -d ' \t\r\n')"
+          VPS_USER="$(printf "%s" "${VPS_USER:-}" | tr -d ' \t\r\n')"
+          VPS_PORT="$(printf "%s" "${VPS_PORT:-}" | tr -d ' \t\r\n')"
+
           # Fail sớm nếu thiếu secrets
           [ -n "${VPS_HOST:-}" ] || (echo "::error::Missing secret VPS_HOST" && exit 1)
           [ -n "${VPS_USER:-}" ] || (echo "::error::Missing secret VPS_USER" && exit 1)
@@ -70,6 +75,16 @@ jobs:
           chmod 600 vps_key
           # ssh-keyscan đôi khi fail trên runner (firewall/timeout). Không để fail job.
           ssh-keyscan -T 10 -p "${VPS_PORT}" -H "${VPS_HOST}" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Preflight TCP connectivity to VPS
+        run: |
+          set -e
+          VPS_HOST="$(printf "%s" "${VPS_HOST:-}" | tr -d ' \t\r\n')"
+          VPS_PORT="$(printf "%s" "${VPS_PORT:-22}" | tr -d ' \t\r\n')"
+          echo "Checking TCP connectivity to VPS_HOST:VPS_PORT ..."
+          timeout 12 bash -lc "cat < /dev/null > /dev/tcp/${VPS_HOST}/${VPS_PORT}" \
+            && echo "OK: TCP ${VPS_HOST}:${VPS_PORT} reachable" \
+            || (echo "::error::Cannot reach ${VPS_HOST}:${VPS_PORT} from GitHub runner (timeout/firewall/SG)" && exit 1)
 
       - name: Upload deploy script to server
         run: |
