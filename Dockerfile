@@ -25,7 +25,7 @@ ENV STREAMLIT_SERVER_PORT=6520 \
 EXPOSE 6520
 
 # Healthcheck: try to hit the root after container starts
-HEALTHCHECK --interval=30s --timeout=5s --retries=5 CMD-SHELL curl -fsS "http://127.0.0.1:${STREAMLIT_SERVER_PORT}/" || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --retries=5 CMD curl -fsS "http://127.0.0.1:${STREAMLIT_SERVER_PORT}/" || exit 1
 
 # Default command: run Streamlit app
 CMD ["bash", "-lc", "streamlit run streamlit_app.py --server.address=0.0.0.0 --server.port=${STREAMLIT_SERVER_PORT}"]
