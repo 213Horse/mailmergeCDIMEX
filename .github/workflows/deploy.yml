@@ -56,11 +56,18 @@ jobs:
       - name: Prepare SSH key & known_hosts
         run: |
           set -e
-          # Nếu VPS_SSH_KEY là base64 -> decode; nếu không -> ghi raw
-          (echo "${VPS_SSH_KEY}" | base64 -d > vps_key 2>/dev/null) || echo "${VPS_SSH_KEY}" > vps_key
-          chmod 600 vps_key
+          # Fail sớm nếu thiếu secrets
+          [ -n "${VPS_HOST:-}" ] || (echo "::error::Missing secret VPS_HOST" && exit 1)
+          [ -n "${VPS_USER:-}" ] || (echo "::error::Missing secret VPS_USER" && exit 1)
+          [ -n "${VPS_SSH_KEY:-}" ] || (echo "::error::Missing secret VPS_SSH_KEY" && exit 1)
+
+          # Ghi key an toàn (hỗ trợ multiline + loại bỏ CRLF), hỗ trợ raw hoặc base64
           mkdir -p ~/.ssh
-          ssh-keyscan -H "${VPS_HOST}" >> ~/.ssh/known_hosts
+          printf "%s" "${VPS_SSH_KEY}" | tr -d '\r' > vps_key.raw
+          (base64 -d < vps_key.raw > vps_key 2>/dev/null) || cp vps_key.raw vps_key
+          chmod 600 vps_key
+          # ssh-keyscan đôi khi fail trên runner (firewall/timeout). Không để fail job.
+          ssh-keyscan -T 10 -H "${VPS_HOST}" >> ~/.ssh/known_hosts 2>/dev/null || true
 
       - name: Upload deploy script to server
         run: |
