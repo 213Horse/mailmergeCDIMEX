@@ -18,6 +18,7 @@ jobs:
       VPS_HOST: ${{ secrets.VPS_HOST }}
       VPS_USER: ${{ secrets.VPS_USER }}
       VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }} # raw hoặc base64 đều được
+      VPS_PORT: ${{ secrets.VPS_PORT }}
       PROD_ENV_FILE: ${{ secrets.PROD_ENV_FILE }}
       DOMAIN: ${{ secrets.DOMAIN }}
       HOST_PORT: ${{ secrets.HOST_PORT }}
@@ -60,6 +61,7 @@ jobs:
           [ -n "${VPS_HOST:-}" ] || (echo "::error::Missing secret VPS_HOST" && exit 1)
           [ -n "${VPS_USER:-}" ] || (echo "::error::Missing secret VPS_USER" && exit 1)
           [ -n "${VPS_SSH_KEY:-}" ] || (echo "::error::Missing secret VPS_SSH_KEY" && exit 1)
+          VPS_PORT="${VPS_PORT:-22}"
 
           # Ghi key an toàn (hỗ trợ multiline + loại bỏ CRLF), hỗ trợ raw hoặc base64
           mkdir -p ~/.ssh
@@ -67,14 +69,16 @@ jobs:
           (base64 -d < vps_key.raw > vps_key 2>/dev/null) || cp vps_key.raw vps_key
           chmod 600 vps_key
           # ssh-keyscan đôi khi fail trên runner (firewall/timeout). Không để fail job.
-          ssh-keyscan -T 10 -H "${VPS_HOST}" >> ~/.ssh/known_hosts 2>/dev/null || true
+          ssh-keyscan -T 10 -p "${VPS_PORT}" -H "${VPS_HOST}" >> ~/.ssh/known_hosts 2>/dev/null || true
 
       - name: Upload deploy script to server
         run: |
           set -e
+          VPS_PORT="${VPS_PORT:-22}"
           # Script này phải tồn tại trong repo: .github/scripts/deploy.sh
           # (Không cần chmod +x vì sẽ gọi qua "bash /tmp/deploy.sh")
-          scp -i vps_key -o StrictHostKeyChecking=no .github/scripts/deploy.sh "${VPS_USER}@${VPS_HOST}:/tmp/deploy.sh"
+          scp -P "${VPS_PORT}" -i vps_key -o StrictHostKeyChecking=no -o ConnectTimeout=20 -o ServerAliveInterval=10 -o ServerAliveCountMax=3 \
+            .github/scripts/deploy.sh "${VPS_USER}@${VPS_HOST}:/tmp/deploy.sh"
 
       - name: Deploy on VPS
         env:
@@ -82,7 +86,8 @@ jobs:
           TAG_SHA: ${{ steps.meta.outputs.tag_sha }}
         run: |
           set -e
-          ssh -i vps_key -o StrictHostKeyChecking=no "${VPS_USER}@${VPS_HOST}" \
+          VPS_PORT="${VPS_PORT:-22}"
+          ssh -p "${VPS_PORT}" -i vps_key -o StrictHostKeyChecking=no -o ConnectTimeout=20 -o ServerAliveInterval=10 -o ServerAliveCountMax=3 "${VPS_USER}@${VPS_HOST}" \
             IMAGE_NAME="${IMAGE_NAME}" \
             REPO_PATH="${REPO_PATH}" \
             TAG_SHA="${TAG_SHA}" \
