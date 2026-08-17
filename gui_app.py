@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext
@@ -15,14 +16,19 @@ class MailMergeGUI(tk.Tk):
         # Form state
         self.recipients_var = tk.StringVar()
         self.template_var = tk.StringVar()
-        self.smtp_host_var = tk.StringVar(value="smtp.gmail.com")
-        self.smtp_port_var = tk.StringVar(value="587")
-        self.smtp_user_var = tk.StringVar(value="admin@bookmedi.vn")
-        self.smtp_pass_var = tk.StringVar(value="T@omoiMK")
-        self.from_name_var = tk.StringVar(value="Bookmedi")
-        self.default_subject_var = tk.StringVar(value="Kết quả bài thi Versant Professional English Test  - {{Ten}}")
-        self.use_ssl_var = tk.BooleanVar(value=False)
-        self.dry_run_var = tk.BooleanVar(value=True)
+        self.smtp_host_var = tk.StringVar(value=os.getenv("SMTP_HOST", "smtp.gmail.com"))
+        self.smtp_port_var = tk.StringVar(value=os.getenv("SMTP_PORT", "587"))
+        self.smtp_user_var = tk.StringVar(value=os.getenv("SMTP_USER", ""))
+        self.smtp_pass_var = tk.StringVar(value=os.getenv("SMTP_PASS", ""))
+        self.from_name_var = tk.StringVar(value=os.getenv("FROM_NAME", "Bookmedi"))
+        self.default_subject_var = tk.StringVar(
+            value=os.getenv(
+                "DEFAULT_SUBJECT",
+                "Kết quả bài thi Versant Professional English Test  - {{Ten}}",
+            )
+        )
+        self.use_ssl_var = tk.BooleanVar(value=os.getenv("SMTP_USE_SSL", "").strip().lower() in {"1", "true", "yes", "y", "on"})
+        self.dry_run_var = tk.BooleanVar(value=os.getenv("DRY_RUN_DEFAULT", "true").strip().lower() in {"1", "true", "yes", "y", "on"})
 
         self._build_form()
 

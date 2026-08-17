@@ -1,0 +1,22 @@
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+
+# Local env files (do not commit secrets)
+.env
+.env.*
+!.env.example
+
+# Streamlit
+.streamlit/
+
+# Data / customer files
+uploads/*.pdf
+recipients*.xlsx
+recipients*.xls
+recipients*.csv
+

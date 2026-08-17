@@ -30,6 +30,43 @@ from send_mail_merge import run_merge
 
 
 # ========== Tiện ích chung ==========
+def _env_str(name: str, default: str = "") -> str:
+    v = os.getenv(name)
+    return default if v is None else v
+
+
+def _env_int(name: str, default: int) -> int:
+    v = os.getenv(name)
+    if v is None or v.strip() == "":
+        return default
+    try:
+        return int(v)
+    except Exception:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    v = os.getenv(name)
+    if v is None or v.strip() == "":
+        return default
+    try:
+        return float(v)
+    except Exception:
+        return default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    v = os.getenv(name)
+    if v is None or v.strip() == "":
+        return default
+    s = v.strip().lower()
+    if s in {"1", "true", "yes", "y", "on"}:
+        return True
+    if s in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
 def _safe_rerun() -> None:
     """Call Streamlit rerun API across versions."""
     rerun_fn = getattr(st, "rerun", None)
@@ -276,18 +313,32 @@ def main() -> None:
             "smtp.office365.com" if smtp_provider == "Outlook (STARTTLS)" else "smtp.gmail.com"
         )
 
-        smtp_host = st.sidebar.text_input("SMTP Host", value=host_default)
-        smtp_port = st.sidebar.number_input("SMTP Port", min_value=1, max_value=65535, value=587)
-        use_ssl = st.sidebar.checkbox("Use SSL (SMTPS)", value=False)
-        smtp_user = st.sidebar.text_input("SMTP User (email)", value="admin@bookmedi.vn")
-        smtp_pass = st.sidebar.text_input("SMTP Password/App Password", type="password", value="T@omoiMK")
-        from_name = st.sidebar.text_input("From Name", value="Bookmedi")
+        smtp_host_default = _env_str("SMTP_HOST", "") or host_default
+        smtp_port_default = _env_int("SMTP_PORT", 587)
+        use_ssl_default = _env_bool("SMTP_USE_SSL", False)
+        smtp_user_default = _env_str("SMTP_USER", "")
+        smtp_pass_default = _env_str("SMTP_PASS", "")
+        from_name_default = _env_str("FROM_NAME", "Bookmedi")
+        default_subject_default = _env_str(
+            "DEFAULT_SUBJECT",
+            "Kết quả bài thi Versant Professional English Test  - {{Ten}}",
+        )
+        dry_run_default = _env_bool("DRY_RUN_DEFAULT", True)
+        rate_delay_default = _env_float("RATE_DELAY_DEFAULT", 1.5)
+
+        smtp_host = st.sidebar.text_input("SMTP Host", value=smtp_host_default)
+        smtp_port = st.sidebar.number_input("SMTP Port", min_value=1, max_value=65535, value=int(smtp_port_default))
+        use_ssl = st.sidebar.checkbox("Use SSL (SMTPS)", value=bool(use_ssl_default))
+        smtp_user = st.sidebar.text_input("SMTP User (email)", value=smtp_user_default)
+        smtp_pass = st.sidebar.text_input("SMTP Password/App Password", type="password", value=smtp_pass_default)
+        from_name = st.sidebar.text_input("From Name", value=from_name_default)
         default_subject = st.sidebar.text_input(
             "Default Subject",
-            value="Kết quả bài thi Versant Professional English Test  - {{Ten}}",
+            value=default_subject_default,
         )
-        dry_run = st.sidebar.checkbox("Dry-run (không gửi thật)", value=True)
-        rate_delay = st.sidebar.slider("Delay giữa mỗi email (giây)", 0.0, 10.0, 1.5, 0.5)
+        dry_run = st.sidebar.checkbox("Dry-run (không gửi thật)", value=bool(dry_run_default))
+        rate_delay_default_clamped = max(0.0, min(10.0, float(rate_delay_default)))
+        rate_delay = st.sidebar.slider("Delay giữa mỗi email (giây)", 0.0, 10.0, rate_delay_default_clamped, 0.5)
 
         # Main form
         st.subheader("Chọn tệp")

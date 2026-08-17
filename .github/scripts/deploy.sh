@@ -4,8 +4,8 @@ set -euo pipefail
 # Chuẩn hóa tên container/app
 SAFE_IMAGE_NAME=$(echo "${IMAGE_NAME:-app}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9._-]+/-/g')
 APP_DIR="/opt/${SAFE_IMAGE_NAME}"
-HOST_PORT="${HOST_PORT:-9000}"
-CONTAINER_PORT="${CONTAINER_PORT:-7001}"
+HOST_PORT="${HOST_PORT:-6520}"
+CONTAINER_PORT="${CONTAINER_PORT:-6520}"
 
 echo "🚀 Deploying $SAFE_IMAGE_NAME (image: ${REPO_PATH}:${TAG_SHA})"
 
@@ -43,7 +43,7 @@ services:
     env_file:
       - .env
     ports:
-      - "127.0.0.1:${HOST_PORT}:${CONTAINER_PORT}"
+      - "0.0.0.0:${HOST_PORT}:${CONTAINER_PORT}"
 YAML
 
 # Pull & chạy container
