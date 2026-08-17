@@ -73,6 +73,15 @@ jobs:
           printf "%s" "${VPS_SSH_KEY}" | tr -d '\r' > vps_key.raw
           (base64 -d < vps_key.raw > vps_key 2>/dev/null) || cp vps_key.raw vps_key
           chmod 600 vps_key
+
+          # Validate key format (prints only fingerprint, not secret)
+          if ! ssh-keygen -y -f vps_key >/dev/null 2>&1; then
+            echo "::error::Invalid VPS_SSH_KEY (cannot be parsed). Use an unencrypted private key (recommended: ed25519) and paste raw or base64."
+            exit 1
+          fi
+          echo "SSH key fingerprint:"
+          ssh-keygen -lf vps_key || true
+
           # ssh-keyscan đôi khi fail trên runner (firewall/timeout). Không để fail job.
           ssh-keyscan -T 10 -p "${VPS_PORT}" -H "${VPS_HOST}" >> ~/.ssh/known_hosts 2>/dev/null || true
 
@@ -92,7 +101,7 @@ jobs:
           VPS_PORT="${VPS_PORT:-22}"
           # Script này phải tồn tại trong repo: .github/scripts/deploy.sh
           # (Không cần chmod +x vì sẽ gọi qua "bash /tmp/deploy.sh")
-          scp -P "${VPS_PORT}" -i vps_key -o StrictHostKeyChecking=no -o ConnectTimeout=20 -o ServerAliveInterval=10 -o ServerAliveCountMax=3 \
+          scp -P "${VPS_PORT}" -i vps_key -o StrictHostKeyChecking=no -o IdentitiesOnly=yes -o PreferredAuthentications=publickey -o PasswordAuthentication=no -o ConnectTimeout=20 -o ServerAliveInterval=10 -o ServerAliveCountMax=3 \
             .github/scripts/deploy.sh "${VPS_USER}@${VPS_HOST}:/tmp/deploy.sh"
 
       - name: Deploy on VPS
@@ -102,7 +111,7 @@ jobs:
         run: |
           set -e
           VPS_PORT="${VPS_PORT:-22}"
-          ssh -p "${VPS_PORT}" -i vps_key -o StrictHostKeyChecking=no -o ConnectTimeout=20 -o ServerAliveInterval=10 -o ServerAliveCountMax=3 "${VPS_USER}@${VPS_HOST}" \
+          ssh -p "${VPS_PORT}" -i vps_key -o StrictHostKeyChecking=no -o IdentitiesOnly=yes -o PreferredAuthentications=publickey -o PasswordAuthentication=no -o ConnectTimeout=20 -o ServerAliveInterval=10 -o ServerAliveCountMax=3 "${VPS_USER}@${VPS_HOST}" \
             IMAGE_NAME="${IMAGE_NAME}" \
             REPO_PATH="${REPO_PATH}" \
             TAG_SHA="${TAG_SHA}" \
