@@ -24,14 +24,32 @@ else
 fi
 
 # Đảm bảo docker compose plugin có sẵn
-if ! docker compose version >/dev/null 2>&1; then
+DOCKER_COMPOSE_CMD=""
+if docker compose version >/dev/null 2>&1; then
+  DOCKER_COMPOSE_CMD="docker compose"
+elif docker-compose version >/dev/null 2>&1; then
+  DOCKER_COMPOSE_CMD="docker-compose"
+else
   if [ -f /etc/os-release ]; then
     . /etc/os-release
     if [ "${ID}" = "ubuntu" ] || [ "${ID}" = "debian" ]; then
       sudo apt-get update -y
-      sudo apt-get install -y docker-compose-plugin
+      # Try v2 plugin first (may require Docker's apt repo on older distros)
+      if sudo apt-get install -y docker-compose-plugin; then
+        DOCKER_COMPOSE_CMD="docker compose"
+      else
+        # Fallback: v1 docker-compose package (available on many older distros)
+        sudo apt-get update -y
+        sudo apt-get install -y docker-compose
+        DOCKER_COMPOSE_CMD="docker-compose"
+      fi
     fi
   fi
+fi
+
+if [ -z "${DOCKER_COMPOSE_CMD}" ]; then
+  echo "[ERROR] Cannot find or install Docker Compose (v2 plugin or v1 docker-compose)."
+  exit 1
 fi
 
 # Login GHCR để pull image private
@@ -52,8 +70,8 @@ YAML
 
 # Pull & chạy container
 export COMPOSE_PROJECT_NAME="${SAFE_IMAGE_NAME}"
-sudo -E docker compose -f "$APP_DIR/docker-compose.yml" pull app
-sudo -E docker compose -f "$APP_DIR/docker-compose.yml" up -d --remove-orphans
+sudo -E ${DOCKER_COMPOSE_CMD} -f "$APP_DIR/docker-compose.yml" pull app
+sudo -E ${DOCKER_COMPOSE_CMD} -f "$APP_DIR/docker-compose.yml" up -d --remove-orphans
 
 # Reload Nginx nếu có
 if command -v nginx >/dev/null 2>&1; then
