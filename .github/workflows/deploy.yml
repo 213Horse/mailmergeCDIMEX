@@ -111,6 +111,8 @@ jobs:
         run: |
           set -e
           VPS_PORT="${VPS_PORT:-22}"
+          # Encode multiline env file to single-line base64 to avoid breaking SSH command
+          PROD_ENV_FILE_B64="$(printf "%s" "${PROD_ENV_FILE:-}" | base64 -w 0)"
           ssh -p "${VPS_PORT}" -i vps_key -o StrictHostKeyChecking=no -o IdentitiesOnly=yes -o PreferredAuthentications=publickey -o PasswordAuthentication=no -o ConnectTimeout=20 -o ServerAliveInterval=10 -o ServerAliveCountMax=3 "${VPS_USER}@${VPS_HOST}" \
             IMAGE_NAME="${IMAGE_NAME}" \
             REPO_PATH="${REPO_PATH}" \
@@ -120,7 +122,7 @@ jobs:
             DOMAIN="${DOMAIN}" \
             GHCR_USERNAME="${GHCR_USERNAME}" \
             GHCR_TOKEN="${GHCR_TOKEN}" \
-            PROD_ENV_FILE="${PROD_ENV_FILE}" \
+            PROD_ENV_FILE_B64="${PROD_ENV_FILE_B64}" \
             bash /tmp/deploy.sh
 
       - name: Cleanup

@@ -13,7 +13,11 @@ echo "🚀 Deploying $SAFE_IMAGE_NAME (image: ${REPO_PATH}:${TAG_SHA})"
 sudo mkdir -p "$APP_DIR"
 
 # Ghi file .env
-if [ -n "${PROD_ENV_FILE:-}" ]; then
+# Lưu ý: truyền PROD_ENV_FILE trực tiếp qua SSH dễ vỡ vì multiline.
+# Ưu tiên dùng PROD_ENV_FILE_B64 (base64, 1 dòng) và decode trên server.
+if [ -n "${PROD_ENV_FILE_B64:-}" ]; then
+  printf "%s" "${PROD_ENV_FILE_B64}" | base64 -d | sudo tee "$APP_DIR/.env" > /dev/null
+elif [ -n "${PROD_ENV_FILE:-}" ]; then
   printf "%s" "${PROD_ENV_FILE}" | sudo tee "$APP_DIR/.env" > /dev/null
 else
   sudo touch "$APP_DIR/.env"
