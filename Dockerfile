@@ -28,6 +28,6 @@ EXPOSE 6520
 HEALTHCHECK --interval=30s --timeout=5s --retries=5 CMD curl -fsS "http://127.0.0.1:${STREAMLIT_SERVER_PORT}/" || exit 1
 
 # Default command: run Streamlit app
-CMD ["bash", "-lc", "streamlit run streamlit_app.py --server.address=0.0.0.0 --server.port=${STREAMLIT_SERVER_PORT}"]
+CMD ["bash", "-lc", "streamlit run streamlit_app.py --server.address=0.0.0.0 --server.port=${STREAMLIT_SERVER_PORT} --server.enableCORS=false --server.enableXsrfProtection=false"]
 
 

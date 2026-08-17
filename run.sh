@@ -29,6 +29,8 @@ echo "[INFO] Streamlit sẽ chạy tại: http://0.0.0.0:${PORT}"
 streamlit run streamlit_app.py \
   --server.address="0.0.0.0" \
   --server.port="${PORT}" \
+  --server.enableCORS="false" \
+  --server.enableXsrfProtection="false" \
   --server.headless="true" \
   --browser.gatherUsageStats="false"
 
