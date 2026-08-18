@@ -106,7 +106,7 @@ def build_message(sender_name, sender_email, to_email, cc, bcc, subject, html_bo
 def _is_http_url(url: str) -> bool:
     return url.startswith("http://") or url.startswith("https://")
 
-def _collect_inline_images(html: str, base_dir: Path | None) -> tuple[str, list]:
+def _collect_inline_images(html: str, base_dir: Path | None, cid_logo_filename: str = "logomedi.png") -> tuple[str, list]:
     """Find local <img src> in HTML and return html with cid + MIMEImage parts.
 
     Only processes src values that are not http(s), not data: and not cid:.
@@ -120,14 +120,23 @@ def _collect_inline_images(html: str, base_dir: Path | None) -> tuple[str, list]
     matches = list({m.group(1).strip() for m in pattern.finditer(html)})
     project_base = Path(__file__).parent.resolve()
 
-    # Special fixed CID alias: cid:bookmedi_logo -> logomedi.png at project root
+    # Special fixed CID alias: cid:bookmedi_logo -> chosen logo file at project root
     if "cid:bookmedi_logo" in html:
-        logo_path = project_base / "logomedi.png"
+        safe_name = Path(cid_logo_filename).name
+        logo_path = project_base / safe_name
         if logo_path.exists():
             try:
                 with open(logo_path, "rb") as f:
                     data = f.read()
-                img = MIMEImage(data, _subtype="png")
+                mime_type, _ = mimetypes.guess_type(str(logo_path))
+                if not mime_type:
+                    ext = logo_path.suffix.lower().lstrip(".")
+                    if ext in {"png", "jpg", "jpeg", "gif", "bmp", "webp"}:
+                        mime_type = f"image/{'jpeg' if ext in {'jpg', 'jpeg'} else ext}"
+                subtype = "png"
+                if mime_type and mime_type.startswith("image/"):
+                    subtype = mime_type.split("/", 1)[1]
+                img = MIMEImage(data, _subtype=subtype)
                 img.add_header("Content-ID", "<bookmedi_logo>")
                 img.add_header("Content-Disposition", "inline", filename=logo_path.name)
                 image_parts.append(img)
@@ -245,6 +254,7 @@ def run_merge(
     dry_run: bool = False,
     use_ssl: bool = False,
     base_dir: str | None = None,
+    cid_logo_filename: str = "logomedi.png",
     progress_callback=None,
 ) -> dict:
     """Run the mail merge process.
@@ -295,7 +305,7 @@ def run_merge(
             log(f"[ERR] {email} -> {err_msg}")
             continue
 
-        body_html_with_cid, inline_imgs = _collect_inline_images(body_html, tpl_path.parent)
+        body_html_with_cid, inline_imgs = _collect_inline_images(body_html, tpl_path.parent, cid_logo_filename=cid_logo_filename)
 
         try:
             msg = build_message(from_name, smtp_user, email, cc, bcc, subject, body_html_with_cid, inline_images=inline_imgs)

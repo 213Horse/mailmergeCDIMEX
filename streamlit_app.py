@@ -10,10 +10,13 @@ os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
 import time
 import tempfile
 from pathlib import Path
-from typing import List
+from typing import List, Tuple, Dict
 import shutil
 import zipfile
 import fcntl  # dùng lock file trên Linux
+import base64
+import mimetypes
+import re
 
 import streamlit as st
 try:
@@ -26,7 +29,7 @@ try:
 except Exception:
     st_quill = None
 
-from send_mail_merge import run_merge
+from send_mail_merge import run_merge, render_template
 
 
 # ========== Tiện ích chung ==========
@@ -110,6 +113,176 @@ def _human_size(num_bytes: int) -> str:
     if unit_idx == 0:
         return f"{int(size)} {units[unit_idx]}"
     return f"{size:.1f} {units[unit_idx]}"
+
+
+def _extract_body_html(html: str) -> str:
+    """Return inner HTML of <body> if present, else return original string.
+
+    Users may paste full HTML documents into header/footer editors; for email composition
+    we only want the body portion to avoid nested <html>/<body>.
+    """
+    if not html:
+        return ""
+    m = re.search(r"<body\b[^>]*>(?P<body>[\s\S]*?)</body>", html, flags=re.IGNORECASE)
+    if m:
+        return (m.group("body") or "").strip()
+    return html.strip()
+
+
+def _extract_style_blocks(html: str) -> str:
+    if not html:
+        return ""
+    blocks = re.findall(r"<style\b[^>]*>[\s\S]*?</style>", html, flags=re.IGNORECASE)
+    return "\n".join(blocks).strip()
+
+
+def _looks_empty_rich_html(html: str | None) -> bool:
+    """Heuristic for WYSIWYG editors that return '<p><br></p>' etc."""
+    if html is None:
+        return True
+    s = str(html).strip()
+    if not s:
+        return True
+    # remove common empty constructs
+    s = s.replace("&nbsp;", " ")
+    # strip tags
+    s = re.sub(r"<[^>]+>", "", s)
+    if s.strip() == "":
+        return True
+    return False
+
+
+def _compose_email_html(header_html: str, body_html: str, footer_html: str) -> str:
+    """Compose a single HTML document for sending / preview."""
+    header_body = _extract_body_html(header_html)
+    body_body = _extract_body_html(body_html)
+    footer_body = _extract_body_html(footer_html)
+
+    style_blocks = "\n".join(
+        b
+        for b in [
+            _extract_style_blocks(header_html),
+            _extract_style_blocks(body_html),
+            _extract_style_blocks(footer_html),
+        ]
+        if b
+    ).strip()
+
+    # Email-friendly wrapper: centered 600px content
+    parts: List[str] = [
+        "<!doctype html>",
+        "<html>",
+        "<head>",
+        '  <meta charset="utf-8"/>',
+        '  <meta name="viewport" content="width=device-width, initial-scale=1"/>',
+    ]
+    if style_blocks:
+        parts.append(style_blocks)
+    parts += [
+        "</head>",
+        '<body style="margin:0;padding:0;">',
+        '  <table width="100%" border="0" cellspacing="0" cellpadding="0" align="center" style="background:#ffffff;">',
+        "    <tr>",
+        '      <td align="center" style="padding:0;">',
+        '        <table width="600" border="0" cellspacing="0" cellpadding="0" style="max-width:600px;width:100%;">',
+        "          <tr><td>",
+        header_body,
+        body_body,
+        footer_body,
+        "          </td></tr>",
+        "        </table>",
+        "      </td>",
+        "    </tr>",
+        "  </table>",
+        "</body>",
+        "</html>",
+    ]
+    return "\n".join([p for p in parts if p is not None])
+
+
+def _file_to_data_url(path: Path) -> str | None:
+    try:
+        mime, _ = mimetypes.guess_type(str(path))
+        if not mime:
+            ext = path.suffix.lower().lstrip(".")
+            if ext in {"png", "jpg", "jpeg", "gif", "webp", "bmp"}:
+                mime = f"image/{'jpeg' if ext in {'jpg', 'jpeg'} else ext}"
+        if not mime or not mime.startswith("image/"):
+            return None
+        data = path.read_bytes()
+        b64 = base64.b64encode(data).decode("ascii")
+        return f"data:{mime};base64,{b64}"
+    except Exception:
+        return None
+
+
+def _preview_html_with_embedded_images(html: str, base_dir: Path, cid_logo_filename: str = "logomedi.png") -> str:
+    """For Streamlit preview only: replace local/cid logo images with data URLs."""
+    if not html:
+        return ""
+
+    project_base = Path(__file__).parent.resolve()
+    logo_path = project_base / Path(cid_logo_filename).name
+    logo_data_url = _file_to_data_url(logo_path) if logo_path.exists() else None
+    if logo_data_url:
+        html = html.replace("cid:bookmedi_logo", logo_data_url)
+
+    # Replace <img src="relative/or/local"> with base64 for preview
+    pattern = re.compile(r'(<img\b[^>]*?\bsrc=)(["\'])([^"\']+)(\2)', re.IGNORECASE | re.DOTALL)
+
+    def _replace(m: re.Match) -> str:
+        prefix, quote, src, suffix_quote = m.group(1), m.group(2), (m.group(3) or "").strip(), m.group(4)
+        if src.startswith(("http://", "https://", "data:", "cid:")):
+            return m.group(0)
+        candidate = Path(src)
+        resolved = candidate
+        if not candidate.is_absolute():
+            # Prefer base_dir (uploads/) then project root
+            resolved = (base_dir / candidate)
+            if not resolved.exists():
+                alt = project_base / candidate
+                if alt.exists():
+                    resolved = alt
+        if not resolved.exists():
+            return m.group(0)
+        data_url = _file_to_data_url(resolved)
+        if not data_url:
+            return m.group(0)
+        return f"{prefix}{quote}{data_url}{suffix_quote}"
+
+    return pattern.sub(_replace, html)
+
+
+def _load_preview_tokens(uploaded_recipients) -> Dict[str, str]:
+    """Build preview token mapping from uploaded recipients (first row) if possible."""
+    tokens: Dict[str, str] = {
+        "Ten": "Nguyễn Văn A",
+        "Email": "nguyenvana@example.com",
+        "NgayGui": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    if uploaded_recipients is None:
+        return tokens
+    try:
+        name = getattr(uploaded_recipients, "name", "") or ""
+        suffix = Path(name).suffix.lower()
+        uploaded_recipients.seek(0)
+        if suffix in {".xlsx", ".xls"}:
+            import pandas as pd  # local import
+            df = pd.read_excel(uploaded_recipients)
+        elif suffix == ".csv":
+            import pandas as pd  # local import
+            df = pd.read_csv(uploaded_recipients)
+        else:
+            return tokens
+        if df is None or len(df) == 0:
+            return tokens
+        row0 = df.iloc[0].to_dict()
+        for k in ["Ten", "Email"]:
+            if k in row0 and str(row0[k]).strip():
+                tokens[k] = str(row0[k]).strip()
+        return tokens
+    except Exception:
+        return tokens
 
 
 class ThrottledLogger:
@@ -413,36 +586,120 @@ def main() -> None:
             except Exception:
                 default_footer = ""
 
-            with st.expander("Thiết lập Header/Footer", expanded=False):
+            with st.expander("Thiết lập Header/Footer (có preview)", expanded=False):
+                st.caption("Bạn có thể soạn bằng WYSIWYG hoặc dán HTML. Khi gửi thật, hệ thống tự nhúng ảnh inline (CID) cho các <img src=\"file.png\">.")
+
+                # Default to HTML unless CKEditor is available (Quill sometimes returns None until edited)
+                hf_default = "WYSIWYG" if st_ckeditor is not None else "HTML"
+                hf_editor_mode = st.radio(
+                    "Cách soạn Header/Footer",
+                    ["WYSIWYG", "HTML"],
+                    horizontal=True,
+                    index=0 if hf_default == "WYSIWYG" else 1,
+                    key="hf_editor_mode",
+                )
+
                 colhf = st.columns(2)
-                header_html = colhf[0].text_area("Header HTML (cố định)", value=default_header, height=180, key="header_html")
-                footer_html = colhf[1].text_area("Footer HTML (cố định)", value=default_footer, height=180, key="footer_html")
+                header_html: str
+                footer_html: str
 
-                if st.button("Lưu header.html / footer.html", key="save_hf"):
-                    try:
-                        if header_html is not None:
-                            header_file.write_text(header_html, encoding="utf-8")
-                        if footer_html is not None:
-                            footer_file.write_text(footer_html, encoding="utf-8")
-                        st.success("Đã lưu header.html và footer.html")
-                    except Exception as exc:
-                        st.error(f"Không thể lưu header/footer: {exc}")
+                if hf_editor_mode == "WYSIWYG" and (st_ckeditor is not None or st_quill is not None):
+                    with colhf[0]:
+                        st.write("Header")
+                        if st_ckeditor is not None:
+                            header_html = st_ckeditor(default_header, key="header_wysiwyg", height=220)
+                        else:
+                            # Seed initial value so Quill isn't empty on first render
+                            if "header_wysiwyg" not in st.session_state:
+                                st.session_state["header_wysiwyg"] = default_header
+                            qv = st_quill(html=True, placeholder="Soạn header...", key="header_wysiwyg")  # type: ignore[misc]
+                            header_html = default_header if _looks_empty_rich_html(qv) else str(qv)
+                    with colhf[1]:
+                        st.write("Footer")
+                        if st_ckeditor is not None:
+                            footer_html = st_ckeditor(default_footer, key="footer_wysiwyg", height=220)
+                        else:
+                            if "footer_wysiwyg" not in st.session_state:
+                                st.session_state["footer_wysiwyg"] = default_footer
+                            qv = st_quill(html=True, placeholder="Soạn footer...", key="footer_wysiwyg")  # type: ignore[misc]
+                            footer_html = default_footer if _looks_empty_rich_html(qv) else str(qv)
+                    # Mirror into session keys used later in sending
+                    st.session_state["header_html"] = header_html
+                    st.session_state["footer_html"] = footer_html
+                else:
+                    header_html = colhf[0].text_area("Header HTML (cố định)", value=default_header, height=220, key="header_html")
+                    footer_html = colhf[1].text_area("Footer HTML (cố định)", value=default_footer, height=220, key="footer_html")
 
-            st.caption("Upload ảnh (logo, banner...) để chèn vào nội dung; dùng src là tên file, ví dụ: <img src=\"banner.png\">")
-            img_uploads = st.file_uploader("Upload ảnh", type=["png","jpg","jpeg","gif","webp"], accept_multiple_files=True, key="img_upl")
-            if img_uploads:
-                if st.button("Lưu ảnh vào uploads/", key="save_imgs"):
-                    saved = 0
-                    for up in img_uploads:
+                col_actions = st.columns([2, 2, 3])
+                with col_actions[0]:
+                    if st.button("Lưu header.html / footer.html", key="save_hf"):
                         try:
-                            dest = (Path(__file__).parent / "uploads" / Path(up.name).name)
-                            with open(dest, "wb") as f:
-                                f.write(up.getbuffer())
-                            saved += 1
+                            header_file.write_text(header_html or "", encoding="utf-8")
+                            footer_file.write_text(footer_html or "", encoding="utf-8")
+                            st.success("Đã lưu header.html và footer.html")
                         except Exception as exc:
-                            st.error(f"Không thể lưu {up.name}: {exc}")
-                    if saved:
-                        st.success(f"Đã lưu {saved} ảnh vào thư mục uploads/")
+                            st.error(f"Không thể lưu header/footer: {exc}")
+
+                with col_actions[1]:
+                    if st.button("Reset về file hiện có", key="reset_hf"):
+                        st.session_state.pop("header_html", None)
+                        st.session_state.pop("footer_html", None)
+                        st.session_state.pop("header_wysiwyg", None)
+                        st.session_state.pop("footer_wysiwyg", None)
+                        _safe_rerun()
+
+                with col_actions[2]:
+                    st.write("")
+
+                # Logo quick replace (logomedi.png) used by cid:bookmedi_logo
+                st.markdown("**Logo mặc định (CID `bookmedi_logo`)**")
+                project_base = Path(__file__).parent.resolve()
+                logo_options = []
+                for name in ["logo_cdimex.png", "logomedi.png"]:
+                    if (project_base / name).exists():
+                        logo_options.append(name)
+                if not logo_options:
+                    logo_options = ["logomedi.png"]
+
+                default_logo = st.session_state.get("cid_logo_filename") or ("logomedi.png" if "logomedi.png" in logo_options else logo_options[0])
+                cid_logo_filename = st.radio(
+                    "Chọn logo gửi kèm (CID `bookmedi_logo`)",
+                    options=logo_options,
+                    index=logo_options.index(default_logo) if default_logo in logo_options else 0,
+                    horizontal=True,
+                    key="cid_logo_filename",
+                )
+
+                chosen_logo_path = (project_base / cid_logo_filename).resolve()
+                if chosen_logo_path.exists():
+                    st.image(str(chosen_logo_path), caption=f"{cid_logo_filename}", width=220)
+
+                st.caption("Gợi ý: trong header/footer dùng `<img src=\"cid:bookmedi_logo\">` để logo luôn nhúng inline khi gửi mail.")
+
+                st.markdown("**Ảnh khác (banner, icon...)**")
+                st.caption("Upload ảnh vào `uploads/` rồi chèn: `<img src=\"tenfile.png\">` (gửi thật sẽ tự nhúng inline).")
+                img_uploads = st.file_uploader("Upload ảnh", type=["png", "jpg", "jpeg", "gif", "webp"], accept_multiple_files=True, key="img_upl")
+                if img_uploads:
+                    if st.button("Lưu ảnh vào uploads/", key="save_imgs"):
+                        saved = 0
+                        for up in img_uploads:
+                            try:
+                                dest = (Path(__file__).parent / "uploads" / Path(up.name).name)
+                                with open(dest, "wb") as f:
+                                    f.write(up.getbuffer())
+                                saved += 1
+                            except Exception as exc:
+                                st.error(f"Không thể lưu {up.name}: {exc}")
+                        if saved:
+                            st.success(f"Đã lưu {saved} ảnh vào thư mục uploads/")
+
+                st.markdown("**Xem trước (preview)**")
+                tokens = _load_preview_tokens(up_recipients)
+                sample_body = (html_content or "").strip() or "<p>(Nội dung trống)</p>"
+                composed = _compose_email_html(header_html or "", sample_body, footer_html or "")
+                composed = render_template(composed, tokens)  # type: ignore[name-defined]
+                composed_preview = _preview_html_with_embedded_images(composed, base / "uploads", cid_logo_filename=cid_logo_filename)
+                st.components.v1.html(composed_preview, height=520, scrolling=True)
 
             with st.expander("Chèn token nhanh", expanded=False):
                 col_t = st.columns(3)
@@ -535,10 +792,10 @@ def main() -> None:
                                 st.error("Nội dung email đang trống.")
                                 st.session_state["running"] = False
                                 return
-                            # Gộp header + nội dung + footer
+                            # Gộp header + nội dung + footer thành 1 HTML doc (tránh nested <html>/<body>)
                             hdr = st.session_state.get("header_html", "") or ""
                             ftr = st.session_state.get("footer_html", "") or ""
-                            full_html = f"{hdr}\n{content_to_use}\n{ftr}" if (hdr or ftr) else content_to_use
+                            full_html = _compose_email_html(hdr, content_to_use, ftr) if (hdr or ftr) else content_to_use
                             # Lưu trong uploads/ để các đường dẫn tương đối trong HTML có thể tham chiếu tới tệp trong dự án
                             try:
                                 editor_tpl = upload_dir / "_editor_template.html"
@@ -569,6 +826,7 @@ def main() -> None:
                             dry_run=bool(dry_run),
                             use_ssl=bool(use_ssl),
                             base_dir=(base_dir_text or str(upload_dir)),
+                            cid_logo_filename=str(st.session_state.get("cid_logo_filename") or "logomedi.png"),
                             progress_callback=throttled_log,
                         )
 
