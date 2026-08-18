@@ -13,7 +13,11 @@ from pathlib import Path
 from typing import List, Tuple, Dict
 import shutil
 import zipfile
-import fcntl  # dùng lock file trên Linux
+import traceback
+try:
+    import fcntl  # type: ignore
+except Exception:
+    fcntl = None  # type: ignore
 import base64
 import mimetypes
 import re
@@ -84,6 +88,13 @@ def _safe_rerun() -> None:
 
 def save_upload(file, suffix: str) -> Path:
     """Persist an uploaded file to a temporary path and return the path."""
+    # Streamlit's UploadedFile can have its cursor advanced by previous reads
+    # (e.g. preview). Always rewind before saving.
+    try:
+        if hasattr(file, "seek"):
+            file.seek(0)
+    except Exception:
+        pass
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         tmp.write(file.read())
         return Path(tmp.name)
@@ -275,6 +286,11 @@ def _load_preview_tokens(uploaded_recipients) -> Dict[str, str]:
             df = pd.read_csv(uploaded_recipients)
         else:
             return tokens
+        # Rewind again so later save_upload() reads full content.
+        try:
+            uploaded_recipients.seek(0)
+        except Exception:
+            pass
         if df is None or len(df) == 0:
             return tokens
         row0 = df.iloc[0].to_dict()
@@ -733,118 +749,140 @@ def main() -> None:
         if start:
             # ====== Lock: ngăn chạy trùng tiến trình ======
             st.session_state["running"] = True
-            lock_path = Path("/tmp/bookmedi_mailmerge.lock")
             try:
-                with open(lock_path, "w") as lock_file:
-                    try:
-                        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    except BlockingIOError:
-                        st.warning("Job khác đang chạy. Vui lòng đợi hoàn tất rồi thử lại.")
-                        st.session_state["running"] = False
-                        return
-
-                    try:
-                        # Persist uploaded PDFs/ZIP to server under uploads/
-                        saved_files: List[Path] = []
-                        if pdf_uploads:
-                            for up in pdf_uploads:
-                                dest = upload_dir / Path(up.name).name
-                                with open(dest, "wb") as f:
-                                    f.write(up.getbuffer())
-                                saved_files.append(dest)
-
-                        if zip_upload is not None:
-                            # Giới hạn kích thước zip để tránh out-of-memory
-                            if zip_upload.size and zip_upload.size > 100 * 1024 * 1024:
-                                st.error(f"ZIP quá lớn ({_human_size(zip_upload.size)}). Vui lòng chia nhỏ (< 100MB).")
-                                st.session_state["running"] = False
-                                return
-                            tmp_zip = save_upload(zip_upload, suffix=".zip")
-                            try:
-                                with zipfile.ZipFile(tmp_zip, "r") as zf:
-                                    zf.extractall(upload_dir)
-                            finally:
-                                try:
-                                    tmp_zip.unlink(missing_ok=True)  # type: ignore[arg-type]
-                                except Exception:
-                                    pass
-
-                        if up_recipients is not None:
-                            recipients_path = save_upload(up_recipients, suffix=Path(up_recipients.name).suffix)
-                        else:
-                            if not default_recipients.exists():
-                                st.error("Chưa chọn recipients và không tìm thấy recipients.xlsx mặc định.")
-                                st.session_state["running"] = False
-                                return
-                            recipients_path = default_recipients
-
-                        if mode == MODE_FILE:
-                            if up_template is not None:
-                                template_path = save_upload(up_template, suffix=".html")
-                            else:
-                                if not default_template.exists():
-                                    st.error("Chưa chọn template và không tìm thấy template.html mặc định.")
-                                    st.session_state["running"] = False
-                                    return
-                                template_path = default_template
-                        else:
-                            # Soạn trực tiếp: ghi ra file tạm để tái sử dụng luồng cũ
-                            content_to_use = (html_content or "").strip()
-                            if not content_to_use:
-                                st.error("Nội dung email đang trống.")
-                                st.session_state["running"] = False
-                                return
-                            # Gộp header + nội dung + footer thành 1 HTML doc (tránh nested <html>/<body>)
-                            hdr = st.session_state.get("header_html", "") or ""
-                            ftr = st.session_state.get("footer_html", "") or ""
-                            full_html = _compose_email_html(hdr, content_to_use, ftr) if (hdr or ftr) else content_to_use
-                            # Lưu trong uploads/ để các đường dẫn tương đối trong HTML có thể tham chiếu tới tệp trong dự án
-                            try:
-                                editor_tpl = upload_dir / "_editor_template.html"
-                                editor_tpl.write_text(full_html, encoding="utf-8")
-                                template_path = editor_tpl
-                            except Exception:
-                                with tempfile.NamedTemporaryFile(delete=False, suffix=".html", mode="w", encoding="utf-8") as tmp_html:
-                                    tmp_html.write(full_html)
-                                    template_path = Path(tmp_html.name)
-
-                        # Thông báo ban đầu
-                        if saved_files:
-                            throttled_log(f"Đã lưu {len(saved_files)} PDF vào: {upload_dir}")
-                        elif zip_upload is not None:
-                            throttled_log(f"Đã giải nén ZIP vào: {upload_dir}")
-
-                        # ==== Chạy merge với callback đã throttle ====
-                        summary = run_merge(
-                            recipients=str(recipients_path),
-                            template=str(template_path),
-                            smtp_host=smtp_host,
-                            smtp_port=int(smtp_port),
-                            smtp_user=smtp_user,
-                            smtp_pass=smtp_pass,
-                            from_name=from_name,
-                            default_subject=default_subject,
-                            rate_delay=float(rate_delay),
-                            dry_run=bool(dry_run),
-                            use_ssl=bool(use_ssl),
-                            base_dir=(base_dir_text or str(upload_dir)),
-                            cid_logo_filename=str(st.session_state.get("cid_logo_filename") or "logomedi.png"),
-                            progress_callback=throttled_log,
-                        )
-
-                        throttled_log.flush()
-                        st.success(f"Hoàn tất. Sent={summary['sent']}, Failed={summary['failed']}")
-                        if summary.get("errors"):
-                            with st.expander("Xem lỗi"):
-                                for em, err in summary["errors"]:
-                                    st.write(f"- {em}: {err}")
-                    finally:
+                # Cross-platform-ish lock: prefer flock when available; otherwise skip.
+                lock_dir = Path(tempfile.gettempdir())
+                lock_path = lock_dir / "bookmedi_mailmerge.lock"
+                lock_file = open(lock_path, "w")
+                lock_acquired = False
+                try:
+                    if fcntl is not None:
                         try:
-                            fcntl.flock(lock_file, fcntl.LOCK_UN)
+                            fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                            lock_acquired = True
+                        except BlockingIOError:
+                            st.warning("Job khác đang chạy. Vui lòng đợi hoàn tất rồi thử lại.")
+                            st.session_state["running"] = False
+                            return
+                        except OSError as exc:
+                            # Some filesystems/environments raise EINVAL for flock.
+                            # Fallback: proceed without OS-level lock (session_state already prevents double-click).
+                            if getattr(exc, "errno", None) == 22:
+                                throttled_log(f"[WARN] Không hỗ trợ file-lock tại {lock_path} (Errno 22). Tiếp tục chạy không dùng lock.")
+                                lock_acquired = False
+                            else:
+                                raise
+                    else:
+                        lock_acquired = False
+
+                    # Persist uploaded PDFs/ZIP to server under uploads/
+                    saved_files: List[Path] = []
+                    if pdf_uploads:
+                        for up in pdf_uploads:
+                            dest = upload_dir / Path(up.name).name
+                            with open(dest, "wb") as f:
+                                f.write(up.getbuffer())
+                            saved_files.append(dest)
+
+                    if zip_upload is not None:
+                        # Giới hạn kích thước zip để tránh out-of-memory
+                        if zip_upload.size and zip_upload.size > 100 * 1024 * 1024:
+                            st.error(f"ZIP quá lớn ({_human_size(zip_upload.size)}). Vui lòng chia nhỏ (< 100MB).")
+                            st.session_state["running"] = False
+                            return
+                        tmp_zip = save_upload(zip_upload, suffix=".zip")
+                        try:
+                            with zipfile.ZipFile(tmp_zip, "r") as zf:
+                                zf.extractall(upload_dir)
+                        finally:
+                            try:
+                                tmp_zip.unlink(missing_ok=True)  # type: ignore[arg-type]
+                            except Exception:
+                                pass
+
+                    if up_recipients is not None:
+                        recipients_path = save_upload(up_recipients, suffix=Path(up_recipients.name).suffix)
+                    else:
+                        if not default_recipients.exists():
+                            st.error("Chưa chọn recipients và không tìm thấy recipients.xlsx mặc định.")
+                            st.session_state["running"] = False
+                            return
+                        recipients_path = default_recipients
+
+                    if mode == MODE_FILE:
+                        if up_template is not None:
+                            template_path = save_upload(up_template, suffix=".html")
+                        else:
+                            if not default_template.exists():
+                                st.error("Chưa chọn template và không tìm thấy template.html mặc định.")
+                                st.session_state["running"] = False
+                                return
+                            template_path = default_template
+                    else:
+                        # Soạn trực tiếp: ghi ra file tạm để tái sử dụng luồng cũ
+                        content_to_use = (html_content or "").strip()
+                        if not content_to_use:
+                            st.error("Nội dung email đang trống.")
+                            st.session_state["running"] = False
+                            return
+                        # Gộp header + nội dung + footer thành 1 HTML doc (tránh nested <html>/<body>)
+                        hdr = st.session_state.get("header_html", "") or ""
+                        ftr = st.session_state.get("footer_html", "") or ""
+                        full_html = _compose_email_html(hdr, content_to_use, ftr) if (hdr or ftr) else content_to_use
+                        # Lưu trong uploads/ để các đường dẫn tương đối trong HTML có thể tham chiếu tới tệp trong dự án
+                        try:
+                            editor_tpl = upload_dir / "_editor_template.html"
+                            editor_tpl.write_text(full_html, encoding="utf-8")
+                            template_path = editor_tpl
                         except Exception:
-                            pass
+                            with tempfile.NamedTemporaryFile(delete=False, suffix=".html", mode="w", encoding="utf-8") as tmp_html:
+                                tmp_html.write(full_html)
+                                template_path = Path(tmp_html.name)
+
+                    # Thông báo ban đầu
+                    if saved_files:
+                        throttled_log(f"Đã lưu {len(saved_files)} PDF vào: {upload_dir}")
+                    elif zip_upload is not None:
+                        throttled_log(f"Đã giải nén ZIP vào: {upload_dir}")
+
+                    # ==== Chạy merge với callback đã throttle ====
+                    summary = run_merge(
+                        recipients=str(recipients_path),
+                        template=str(template_path),
+                        smtp_host=smtp_host,
+                        smtp_port=int(smtp_port),
+                        smtp_user=smtp_user,
+                        smtp_pass=smtp_pass,
+                        from_name=from_name,
+                        default_subject=default_subject,
+                        rate_delay=float(rate_delay),
+                        dry_run=bool(dry_run),
+                        use_ssl=bool(use_ssl),
+                        base_dir=(base_dir_text or str(upload_dir)),
+                        cid_logo_filename=str(st.session_state.get("cid_logo_filename") or "logomedi.png"),
+                        progress_callback=throttled_log,
+                    )
+
+                    throttled_log.flush()
+                    st.success(f"Hoàn tất. Sent={summary['sent']}, Failed={summary['failed']}")
+                    if summary.get("errors"):
+                        with st.expander("Xem lỗi"):
+                            for em, err in summary["errors"]:
+                                st.write(f"- {em}: {err}")
+                finally:
+                    try:
+                        if fcntl is not None and lock_acquired:
+                            fcntl.flock(lock_file, fcntl.LOCK_UN)
+                    except Exception:
+                        pass
+                    try:
+                        lock_file.close()
+                    except Exception:
+                        pass
             except Exception as exc:
                 st.error(str(exc))
+                with st.expander("Chi tiết lỗi (debug)", expanded=False):
+                    st.code(traceback.format_exc())
             finally:
                 st.session_state["running"] = False
 
