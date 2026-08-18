@@ -18,7 +18,7 @@ import requests
 from pathlib import Path
 
 REQUIRED_COLS = ["Email", "Ten"]
-OPTIONAL_COLS = ["Subject", "CC", "BCC", "FilePDF"]
+OPTIONAL_COLS = ["Subject", "CC", "BCC", "FilePDF", "Code"]
 
 import re
 import pandas as pd  # local import for script
@@ -67,11 +67,21 @@ def load_recipients(path: Path) -> pd.DataFrame:
     return df
 
 def render_template(html: str, mapping: dict) -> str:
-    # simple {{key}} replacement
-    out = html
-    for k, v in mapping.items():
-        out = out.replace("{{" + k + "}}", str(v))
-    return out
+    if not html:
+        return ""
+    if not mapping:
+        return html
+    # Replace {{Key}} placeholders with values from mapping.
+    # Supports whitespace inside braces: {{ Key }}.
+    pattern = re.compile(r"\{\{\s*([A-Za-z0-9_]+)\s*\}\}")
+
+    def _repl(m: re.Match) -> str:
+        key = m.group(1)
+        if key in mapping:
+            return str(mapping.get(key, ""))
+        return m.group(0)
+
+    return pattern.sub(_repl, html)
 
 def build_message(sender_name, sender_email, to_email, cc, bcc, subject, html_body, text_fallback=None, inline_images=None):
     """Create an email message with HTML, text fallback and optional inline images.
@@ -290,11 +300,11 @@ def run_merge(
         bcc = normalize_field(row.get("BCC", ""))
         subj_tpl = normalize_field(row.get("Subject", "")) or default_subject
 
-        tokens = {
-            "Ten": ten,
-            "Email": email,
-            "NgayGui": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        }
+        # Build token mapping from ALL columns (including optional Code, etc.)
+        tokens = {str(col): normalize_field(row.get(col, "")) for col in df.columns}
+        tokens["Ten"] = ten
+        tokens["Email"] = email
+        tokens["NgayGui"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         subject = render_template(subj_tpl, tokens)
         body_html = render_template(html, tokens)
         # Prepare inline images referenced by template

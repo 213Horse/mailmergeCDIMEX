@@ -258,6 +258,7 @@ def _load_preview_tokens(uploaded_recipients) -> Dict[str, str]:
     tokens: Dict[str, str] = {
         "Ten": "Nguyễn Văn A",
         "Email": "nguyenvana@example.com",
+        "Code": "ABC123",
         "NgayGui": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
     if uploaded_recipients is None:
@@ -277,7 +278,7 @@ def _load_preview_tokens(uploaded_recipients) -> Dict[str, str]:
         if df is None or len(df) == 0:
             return tokens
         row0 = df.iloc[0].to_dict()
-        for k in ["Ten", "Email"]:
+        for k in ["Ten", "Email", "Code"]:
             if k in row0 and str(row0[k]).strip():
                 tokens[k] = str(row0[k]).strip()
         return tokens
@@ -537,7 +538,7 @@ def main() -> None:
                 key="tpl_upl",
             )
         else:
-            st.caption("Bạn có thể gõ nội dung và dùng token như {{Ten}}, {{Email}} ...")
+            st.caption("Bạn có thể gõ nội dung và dùng token như {{Ten}}, {{Email}}, {{Code}} ...")
             default_html = ""
             try:
                 if default_template.exists():
@@ -703,9 +704,10 @@ def main() -> None:
 
             with st.expander("Chèn token nhanh", expanded=False):
                 col_t = st.columns(3)
-                tokens = ["{{Ten}}", "{{Email}}", "{{NgayGui}}"]
+                tokens = ["{{Ten}}", "{{Email}}", "{{Code}}", "{{NgayGui}}"]
                 for i, tk in enumerate(tokens):
-                    if col_t[i].button(tk, key=f"ins_{tk}"):
+                    col_idx = i % len(col_t)
+                    if col_t[col_idx].button(tk, key=f"ins_{tk}"):
                         try:
                             cur = st.session_state.get(editor_key, "") or ""
                             st.session_state[editor_key] = f"{cur}{tk}"
